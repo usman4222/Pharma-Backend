@@ -1,7 +1,8 @@
 import { User } from "../models/userModel.js";
 import { UserLedger } from "../models/userLedgerModel.js";
 import { sendError, successResponse } from "../utils/response.js";
-
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 // GET all users (filtered by status)
 const getAllUsers = async (req, res) => {
   try {
@@ -30,26 +31,87 @@ const getUserById = async (req, res) => {
 };
 
 // CREATE user
-const createUser = async (req, res) => {
+export const createUser = async (req, res) => {
   try {
-    const userData = req.body;
+    const {
+      name,
+      father_name,
+      email,
+      password,
+      phone_number,
+      mobile_number,
+      salary,
+      city,
+      areas,
+      role,
+      employee_type,
+      incentive_type,
+      incentive_percentage,
+      type,
+      join_date,
+      cnic,
+      profile_photo,
+      cnic_front,
+      cnic_back,
+      cheque_photo,
+      e_stamp,
+      status,
+    } = req.body;
 
-    const user = new User(userData);
-    await user.save();
+    // ✅ Required field validation
+    if (!name || !father_name || !email || !password) {
+      return sendError(res, "name, father_name, email, and password are required", 400);
+    }
 
-    if (userData.salary) {
+    // ✅ Hash password before saving
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // ✅ Prepare user data
+    const userData = {
+      name,
+      father_name,
+      email,
+      password: hashedPassword,
+      phone_number: phone_number || "",
+      mobile_number: mobile_number || "",
+      salary: salary || 0,
+      city: city || "",
+      areas: Array.isArray(areas) ? areas : [],
+      role: role || "",
+      employee_type: employee_type || "",
+      incentive_type: incentive_type || "",
+      incentive_percentage: incentive_percentage || 0,
+      type: type || "",
+      join_date: join_date || null,
+      cnic: cnic || "",
+      profile_photo: profile_photo || "",
+      cnic_front: cnic_front || "",
+      cnic_back: cnic_back || "",
+      cheque_photo: cheque_photo || "",
+      e_stamp: e_stamp || "",
+      status: status || "active",
+    };
+
+    // ✅ Create user
+    const user = await User.create(userData);
+
+    // ✅ Create UserLedger if salary is valid
+    if (salary && salary > 0) {
       await UserLedger.create({
         user_id: user._id,
-        salary: userData.salary,
+        salary,
         date: new Date(),
       });
     }
 
-    successResponse(res, "User created", {user});
+    return successResponse(res, "User created successfully", { user }, 201);
   } catch (error) {
-    sendError(res, "Create User Error", error);
+    console.error("Create User Error:", error);
+    return sendError(res, "Failed to create user", 500);
   }
 };
+
+
 
 // UPDATE user
 const updateUser = async (req, res) => {

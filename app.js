@@ -4,6 +4,7 @@ import compression from "compression";
 import rateLimit from "express-rate-limit";
 
 import userRoute from "./routes/userRoutes.js";
+import authRoute from "./routes/authRoutes.js";
 import productRoute from "./routes/productRoutes.js";
 import supplierRoute from "./routes/supplierRoutes.js"; 
 import customerRoute from "./routes/customerRoutes.js"; 
@@ -13,6 +14,7 @@ import companyRoute from "./routes/companyRoutes.js";
 import productTypeRoute from "./routes/productTypeRoutes.js"; 
 import purchaseRoute from "./routes/purchaseRoutes.js"; 
 import saleRoute from "./routes/saleRoutes.js";
+import cors from 'cors';
 
 // import healthRoute from "./routes/health.js"; 
 
@@ -31,14 +33,21 @@ const apiLimiter = rateLimit({
   message: "Too many requests, try again later",
 });
 
+// Allow requests from your frontend
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true,
+}));
+
 // ✅ Test route
 app.get("/api/test", (req, res) => {
   res.send("API is running...");
 });
 
 // ✅ Apply limiter only to routes
-// app.use("/api/health", apiLimiter, healthRoute);
+// app.use("/api/health", apiLimiter, healthRoute);  
 app.use("/api/user", apiLimiter, userRoute);
+app.use("/api/auth", apiLimiter, authRoute);
 app.use("/api/product", apiLimiter, productRoute);
 app.use("/api/area", apiLimiter, areaRoute);
 app.use("/api/supplier", apiLimiter, supplierRoute);
