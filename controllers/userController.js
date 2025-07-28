@@ -6,18 +6,37 @@ import jwt from "jsonwebtoken";
 // GET all users (filtered by status)
 const getAllUsers = async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, page = 1, limit = 10 } = req.query;
+
     const query = {};
     if (status !== undefined) {
       query.status = status;
     }
 
-    const users = await User.find(query).sort({ createdAt: -1 });
-    successResponse(res, "Users fetched", users);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const totalUsers = await User.countDocuments(query);
+    const users = await User.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('area_id', 'name city description');
+
+    const totalPages = Math.ceil(totalUsers / parseInt(limit));
+    const hasMore = page < totalPages;
+
+    return successResponse(res, "Users fetched successfully", {
+      users,
+      currentPage: parseInt(page),
+      totalPages,
+      totalItems: totalUsers,
+      pageSize: parseInt(limit),
+      hasMore,
+    });
   } catch (error) {
-    sendError(res, "Get Users Error", error);
+    return sendError(res, "Get Users Error", error);
   }
 };
+ 
 
 // GET single user
 const getUserById = async (req, res) => {
@@ -42,12 +61,11 @@ export const createUser = async (req, res) => {
       mobile_number,
       salary,
       city,
-      areas,
+      area_id,
       role,
       employee_type,
       incentive_type,
       incentive_percentage,
-      type,
       join_date,
       cnic,
       profile_photo,
@@ -72,16 +90,15 @@ export const createUser = async (req, res) => {
       father_name,
       email,
       password: hashedPassword,
-      phone_number: phone_number || "",
-      mobile_number: mobile_number || "",
+      phone_number: phone_number || null,
+      mobile_number: mobile_number || null,
       salary: salary || 0,
       city: city || "",
-      areas: Array.isArray(areas) ? areas : [],
+      area_id: area_id || "",
       role: role || "",
       employee_type: employee_type || "",
       incentive_type: incentive_type || "",
       incentive_percentage: incentive_percentage || 0,
-      type: type || "",
       join_date: join_date || null,
       cnic: cnic || "",
       profile_photo: profile_photo || "",
@@ -107,6 +124,11 @@ export const createUser = async (req, res) => {
     return successResponse(res, "User created successfully", { user }, 201);
   } catch (error) {
     console.error("Create User Error:", error);
+
+    // Duplicate key error handling
+    if (error.code === 11000 && error.keyPattern?.email) {
+      return sendError(res, "A user with this email already exists", 400);
+    }
     return sendError(res, "Failed to create user", 500);
   }
 };

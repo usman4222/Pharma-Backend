@@ -4,7 +4,7 @@ import { sendError, successResponse } from "../utils/response.js";
 // Create Company
 export const createCompany = async (req, res) => {
   try {
-    const { name, ptcl_number, phone_number, address, image, email, city_id } = req.body;
+    const { name, ptcl_number, phone_number, address, image, email, city } = req.body;
 
     if (!name) {
       return sendError(res, "Company name is required", 400);
@@ -17,7 +17,7 @@ export const createCompany = async (req, res) => {
       address: address || "",
       image: image || "",
       email: email || "",
-      city_id: city_id || null,
+      city: city || "",
     });
 
     return successResponse(res, "Company created successfully", { company }, 201);

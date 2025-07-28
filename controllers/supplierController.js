@@ -12,7 +12,7 @@ export const getAllSuppliers = async (req, res) => {
     };
 
     const suppliers = await SupplierModel.find(filter)
-      .populate("area_id city_id")
+      .populate('area_id', 'name city description')
       .skip(skip)
       .limit(limit);
 
@@ -36,8 +36,8 @@ export const getAllSuppliers = async (req, res) => {
 
 export const getSupplierById = async (req, res) => {
   try {
-    const supplier = await SupplierModel.findById(req.params.id);
-    // .populate("area_id city_id");
+    const supplier = await SupplierModel.findById(req.params.id)
+    .populate('area_id', 'name')
     if (!supplier) return sendError(res, "Supplier not found", 404);
     return successResponse(res, "Supplier fetched", { supplier });
   } catch (error) {
@@ -49,14 +49,16 @@ export const getSupplierById = async (req, res) => {
 export const createSupplier = async (req, res) => {
   try {
     const {
-      name,
+      owner1_name,
+      owner2_name,
+      owner1_phone_number,
+      owner2_phone_number,
       email,
       phone_number,
       ptcl_number,
       address,
       area_id,
-      city_id,
-      booker_id,
+      city,
       licence_number,
       licence_expiry,
       ntn_number,
@@ -65,20 +67,41 @@ export const createSupplier = async (req, res) => {
       credit_period,
       credit_limit,
       cnic,
-    } = req.body;
+      licence_photo,
+    } = req.body || {};
 
-    // ✅ Required field validation
-    if (!name) {
-      return sendError(res, "Supplier name is required", 400);
+    if (!owner1_name) {
+      return sendError(res, "Name and Area are required fields.");
     }
 
-    // ✅ Prepare data conditionally (only include ObjectId fields if valid)
+    // 🔍 Check for existing supplier
+    const existing = await SupplierModel.findOne({
+      $or: [
+        { email: email },
+      ],
+    });
+
+    if (existing) {
+      return sendError(res, "Supplier with same email already exists", 400);
+    }
+
+    const booker_id = req.user.id;
+
+    console.log("booker_id",booker_id)
+
+    // 📦 Prepare supplier data
     const supplierData = {
-      name,
+      owner1_name,
+      owner2_name: owner2_name || "",
+      owner1_phone_number: owner1_phone_number || "",
+      owner2_phone_number: owner2_phone_number || "" ,
       email: email || "",
       phone_number: phone_number || "",
       ptcl_number: ptcl_number || "",
       address: address || "",
+      area_id,
+      city,
+      booker_id,
       licence_number: licence_number || "",
       licence_expiry: licence_expiry || "",
       ntn_number: ntn_number || "",
@@ -88,24 +111,15 @@ export const createSupplier = async (req, res) => {
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
       status: "active",
+      licence_photo: ""
     };
 
-    // ✅ Only assign valid ObjectIds
-    if (area_id) supplierData.area_id = area_id;
-    if (city_id) supplierData.city_id = city_id;
-    if (booker_id) supplierData.booker_id = booker_id;
+    const supplier = new SupplierModel(supplierData);
+    await supplier.save();
 
-    const supplier = await SupplierModel.create(supplierData);
-
-    return successResponse(
-      res,
-      "Supplier created successfully",
-      { supplier },
-      201
-    );
+    return successResponse(res, "Supplier created successfully", { supplier });
   } catch (error) {
-    console.error("Create Supplier Error:", error);
-    return sendError(res, "Failed to create supplier", 500);
+    sendError(res, "Create Supplier Error", error);
   }
 };
 

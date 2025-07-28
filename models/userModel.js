@@ -27,14 +27,26 @@ const userSchema = new mongoose.Schema(
     salary: {
       type: Number,
     },
-    city: { type: String }, // 👈 New
-    areas: [{ type: String }], // 👈 New
-    role: { type: String }, // 👈 New
-    employee_type: { type: String }, // 👈 New
-    incentive_type: { type: String }, // 👈 New
+    city: { type: String },
+    area_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Area'
+    },
+    role: {
+      type: String,
+      enum: ["admin", "employee"],
+      default: "employee",
+    },
+    incentive_type: {
+      type: String,
+      enum: ["recovery", "sale"],
+      default: "sale",
+    },
     incentive_percentage: { type: Number },
-    type: {
-      type: String, // e.g., 'admin', 'employee', etc.
+    employee_type: {
+      type: String,
+      enum: ["booker", "supply_man", "order_taker", "tea_man", "it", "branch_manager", "founder"],
+      default: "supply_man",
     },
     join_date: {
       type: Date,
@@ -65,7 +77,7 @@ const userSchema = new mongoose.Schema(
     tokenVersion: {
       type: Number,
       default: 0
-    }    
+    }
   },
   {
     timestamps: true,

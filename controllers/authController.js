@@ -27,13 +27,13 @@ export const loginUser = async (req, res) => {
       }
   
       // ✅ Check if user is admin
-      if (user.type !== "admin") {
+      if (user.role !== "admin") {
         return sendError(res, "Only admin users can log in", 403);
       }
   
       // ✅ Create JWT token
       const token = jwt.sign(
-        { userId: user._id, type: user.type, tokenVersion: user.tokenVersion || 0 },
+        { userId: user._id, role: user.role, tokenVersion: user.tokenVersion || 0 },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN }
       );

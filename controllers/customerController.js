@@ -13,7 +13,7 @@ export const getAllCustomers = async (req, res) => {
     };
 
     const customers = await SupplierModel.find(filter)
-      .populate("area_id city_id")
+      .populate('area_id', 'name city description')
       .skip(skip)
       .limit(limit);
 
@@ -84,19 +84,71 @@ export const showCustomer = async (req, res) => {
 // Create new customer
 export const createCustomer = async (req, res) => {
   try {
-    const { name } = req.body;
-    if (!name) return sendError(res, "Name is required", 400);
+    const {
+      owner1_name,
+      owner2_name,
+      owner1_phone_number,
+      owner2_phone_number,
+      email,
+      phone_number,
+      ptcl_number,
+      address,
+      area_id,
+      city,
+      licence_number,
+      licence_expiry,
+      ntn_number,
+      role,
+      opening_balance,
+      credit_period,
+      credit_limit,
+      cnic,
+      licence_photo,
+    } = req.body || {};
 
-    const customerData = {
-      ...req.body,
-      role: req.body.role || "customer",
-      status: "active",
-    };
-
-    // Handle uploaded image if using file middleware (like multer)
-    if (req.file) {
-      customerData.licence_photo = req.file.filename;
+    if (!owner1_name) {
+      return sendError(res, "Name are required fields.");
     }
+
+    // 🔍 Check for existing supplier
+    const existing = await SupplierModel.findOne({
+      $or: [
+        { email: email },
+      ],
+    });
+
+    if (existing) {
+      return sendError(res, "Supplier with same email already exists", 400);
+    }
+
+    const booker_id = req.user.id;
+
+    console.log("booker_id", booker_id)
+
+    // 📦 Prepare supplier data
+    const customerData = {
+      owner1_name,
+      owner2_name: owner2_name || "",
+      owner1_phone_number: owner1_phone_number || "",
+      owner2_phone_number: owner2_phone_number || "",
+      email: email || "",
+      phone_number: phone_number || "",
+      ptcl_number: ptcl_number || "",
+      address: address || "",
+      area_id,
+      city,
+      booker_id,
+      licence_number: licence_number || "",
+      licence_expiry: licence_expiry || "",
+      ntn_number: ntn_number || "",
+      role: role || "supplier",
+      opening_balance: opening_balance || 0,
+      credit_period: credit_period || 0,
+      credit_limit: credit_limit || 0,
+      cnic: cnic || "",
+      status: "active",
+      licence_photo: ""
+    };
 
     const customer = await SupplierModel.create(customerData);
     return successResponse(res, "Customer created", { customer }, 201);
@@ -108,29 +160,29 @@ export const createCustomer = async (req, res) => {
 
 // Update customer
 export const updateCustomer = async (req, res) => {
-    try {
-      const customer = await SupplierModel.findById(req.params.id);
-      if (!customer) return sendError(res, "Customer not found", 404);
-  
-      const updateData = {
-        ...req.body,
-      };
-  
-      if (req.file) {
-        updateData.licence_photo = req.file.filename;
-      }
-  
-      await customer.updateOne(updateData);
-  
-      // ✅ Refetch updated customer
-      const updatedCustomer = await SupplierModel.findById(req.params.id);
-  
-      return successResponse(res, "Customer updated successfully", { customer: updatedCustomer });
-    } catch (error) {
-      console.error("Update Customer Error:", error);
-      return sendError(res, "Failed to update customer", 500);
+  try {
+    const customer = await SupplierModel.findById(req.params.id);
+    if (!customer) return sendError(res, "Customer not found", 404);
+
+    const updateData = {
+      ...req.body,
+    };
+
+    if (req.file) {
+      updateData.licence_photo = req.file.filename;
     }
-  };
+
+    await customer.updateOne(updateData);
+
+    // ✅ Refetch updated customer
+    const updatedCustomer = await SupplierModel.findById(req.params.id);
+
+    return successResponse(res, "Customer updated successfully", { customer: updatedCustomer });
+  } catch (error) {
+    console.error("Update Customer Error:", error);
+    return sendError(res, "Failed to update customer", 500);
+  }
+};
 
 // Delete customer
 export const deleteCustomer = async (req, res) => {

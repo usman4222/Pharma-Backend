@@ -1,15 +1,28 @@
 import mongoose from 'mongoose';
 
 const supplierSchema = new mongoose.Schema({
-  name: {
+  owner1_name: {
     type: String,
     required: true,
+    trim: true
+  },
+  owner2_name: {
+    type: String,
     trim: true
   },
   email: {
     type: String,
     trim: true,
     lowercase: true
+  },
+  owner1_phone_number: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  owner2_phone_number: {
+    type: String,
+    trim: true
   },
   phone_number: {
     type: String,
@@ -25,13 +38,11 @@ const supplierSchema = new mongoose.Schema({
   },
   area_id: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Areas'
+    ref: 'Area'
   },
-  city_id: {
+  city: {
     type: String,
     trim: true
-    // type: mongoose.Schema.Types.ObjectId,
-    // ref: 'Cities' // You might want to reference a proper City model instead of keeping it as String
   },
   booker_id: {
     type: mongoose.Schema.Types.ObjectId,
@@ -55,8 +66,10 @@ const supplierSchema = new mongoose.Schema({
   },
   role: {
     type: String,
+    enum: ['customer', 'supplier', 'both'],
+    default: 'supplier',
     trim: true
-  },
+  },  
   opening_balance: {
     type: Number,
     default: 0

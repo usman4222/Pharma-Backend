@@ -9,14 +9,11 @@ const areaSchema = new mongoose.Schema({
     type: String
   },
   city: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'City',
+    type: String,
     required: true
   }
 }, {
   timestamps: true
 });
 
-const Area = mongoose.model('Area', areaSchema);
-
-export default Area;
+export const Area = mongoose.model('Area', areaSchema);

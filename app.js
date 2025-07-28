@@ -46,7 +46,7 @@ app.get("/api/test", (req, res) => {
 
 // ✅ Apply limiter only to routes
 // app.use("/api/health", apiLimiter, healthRoute);  
-app.use("/api/user", apiLimiter, userRoute);
+app.use("/api/users", apiLimiter, userRoute);
 app.use("/api/auth", apiLimiter, authRoute);
 app.use("/api/product", apiLimiter, productRoute);
 app.use("/api/area", apiLimiter, areaRoute);

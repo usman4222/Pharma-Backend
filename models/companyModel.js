@@ -26,7 +26,7 @@ const companySchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    city_id: {
+    city: {
         type: String,
         default: null,
     },
