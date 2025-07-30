@@ -6,10 +6,6 @@ const userLedgerSchema = new mongoose.Schema({
     ref: "User", 
     required: true,
   },
-  date: {
-    type: Date,
-    required: true,
-  },
   salary: {
     type: Number,
     default: 0,
