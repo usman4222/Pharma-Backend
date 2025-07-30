@@ -5,7 +5,7 @@ const productSchema = new mongoose.Schema(
     company_id: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
     generic_id: { type: mongoose.Schema.Types.ObjectId, ref: "Generic", required: true },
     name: { type: String, required: true },
-    pack_size: { type: mongoose.Schema.Types.ObjectId, ref: "PackSize", required: true },
+    pack_size_id: { type: mongoose.Schema.Types.ObjectId, ref: "PackSize", required: true },
     carton_size: { type: String },
     quantity_alert: { type: Number, default: 0 },
     barcode_symbology: { type: String },

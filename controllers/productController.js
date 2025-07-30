@@ -8,7 +8,7 @@ export const createProduct = async (req, res) => {
         company_id,
         generic_id,
         name,
-        pack_size,
+        pack_size_id,
         carton_size,
         quantity_alert,
         barcode_symbology,
@@ -23,10 +23,10 @@ export const createProduct = async (req, res) => {
       } = req.body;
   
       // ✅ Required fields validation
-      if (!company_id || !name || !pack_size || !product_type || retail_price === undefined) {
+      if (!company_id || !name || !pack_size_id || !product_type || retail_price === undefined) {
         return sendError(
           res,
-          "company_id, name, pack_size, product_type, and retail_price are required fields",
+          "company_id, name, pack_size_id, product_type, and retail_price are required fields",
           400
         );
       }
@@ -35,7 +35,7 @@ export const createProduct = async (req, res) => {
         company_id,
         generic_id,
         name,
-        pack_size,
+        pack_size_id,
         carton_size: carton_size || "",
         quantity_alert: quantity_alert || 0,
         barcode_symbology: barcode_symbology || "",
