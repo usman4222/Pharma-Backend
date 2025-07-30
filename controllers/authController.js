@@ -5,80 +5,134 @@ import jwt from "jsonwebtoken";
 
 //login User
 export const loginUser = async (req, res) => {
-    try {
-      const { email, password } = req.body;
-  
-      // ✅ Check email and password
-      if (!email || !password) {
-        return sendError(res, "Email and password are required", 400);
-      }
-  
-      // ✅ Find user by email
-      const user = await User.findOne({ email });
-  
-      if (!user) {
-        return sendError(res, "Invalid email or password", 401);
-      }
-  
-      // ✅ Compare password
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return sendError(res, "Invalid email or password", 401);
-      }
-  
-      // ✅ Check if user is admin
-      if (user.role !== "admin") {
-        return sendError(res, "Only admin users can log in", 403);
-      }
-  
-      // ✅ Create JWT token
-      const token = jwt.sign(
-        { userId: user._id, role: user.role, tokenVersion: user.tokenVersion || 0 },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
-      );
-  
-      // ✅ Success response
-      return successResponse(res, "Login successful", {
-        token,
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          type: user.type,
-        },
-      });
-    } catch (error) {
-      console.error("Login Error:", error);
-      return sendError(res, "Login failed", 500);
+  try {
+    const { email, password } = req.body;
+
+    // ✅ Check email and password
+    if (!email || !password) {
+      return sendError(res, "Email and password are required", 400);
     }
-  };
-  
-  export const logoutUser = async (req, res) => {
-    try {
-        const userId = req.user.id;
-  
-        const user = await User.findById(userId);
-        if (!user) {
-            return sendError(res, "User not found", 404);
-        }
-  
-        user.tokenVersion = (user.tokenVersion || 0) + 1;
-        await user.save();
-  
-        return successResponse(res, "Logout successful", null, 200);
-    } catch (error) {
-        console.error("Logout error:", error);
-        return sendError(res, "Failed to logout", 500);
+
+    // ✅ Find user by email
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return sendError(res, "Invalid email or password", 401);
     }
-  };
+
+    // ✅ Compare password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return sendError(res, "Invalid email or password", 401);
+    }
+
+    // ✅ Check if user is admin
+    if (user.role !== "admin") {
+      return sendError(res, "Only admin users can log in", 403);
+    }
+
+    // ✅ Create JWT token
+    const token = jwt.sign(
+      { userId: user._id, role: user.role, tokenVersion: user.tokenVersion || 0 },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    // ✅ Success response
+    return successResponse(res, "Login successful", {
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        type: user.type,
+      },
+    });
+  } catch (error) {
+    console.error("Login Error:", error);
+    return sendError(res, "Login failed", 500);
+  }
+};
 
 
-  const authController = {
-    logoutUser,
-    loginUser
-  };
-  
-  export default authController;
-  
+// UPDATE password
+export const updatePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+
+    // Validate all required fields
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      return sendError(res, "Old password, new password, and confirm password are required", 400);
+    }
+
+    // Validate password length (minimum 6 characters)
+    if (newPassword.length < 6) {
+      return sendError(res, "New password must be at least 6 characters long", 400);
+    }
+
+    if (newPassword !== confirmPassword) {
+      return sendError(res, "New password and confirmation password do not match", 400);
+    }
+
+    // Fetch user by ID from the decoded JWT token
+    const user = await User.findById(req.user.id); 
+    if (!user) {
+      return sendError(res, "User not found");
+    }
+
+    // Ensure the logged-in user is the one trying to update the password
+    if (req.user.id.toString() !== user.id.toString()) {
+      return sendError(res, "You can only update your own password", 403);
+    }
+
+    // Check if the old password matches the stored password
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return sendError(res, "Old password is incorrect", 400);
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update the password in the database
+    user.password = hashedPassword;
+    await user.save();
+
+    return successResponse(res, "Password updated successfully", { user });
+  } catch (error) {
+    console.error("Update Password Error:", error);
+    sendError(res, "Failed to update password", error);
+  }
+};
+
+
+
+
+export const logoutUser = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return sendError(res, "User not found", 404);
+    }
+
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save();
+
+    return successResponse(res, "Logout successful", null, 200);
+  } catch (error) {
+    console.error("Logout error:", error);
+    return sendError(res, "Failed to logout", 500);
+  }
+};
+
+
+const authController = {
+  logoutUser,
+  loginUser,
+  updatePassword
+};
+
+export default authController;

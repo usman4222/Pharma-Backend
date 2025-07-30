@@ -36,14 +36,16 @@ const getAllUsers = async (req, res) => {
     return sendError(res, "Get Users Error", error);
   }
 };
- 
+
+
+
 
 // GET single user
 const getUserById = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).populate('area_id name');
     if (!user) return sendError(res, "User not found");
-    successResponse(res, "User fetched", user);
+    successResponse(res, "User fetched", { user });
   } catch (error) {
     sendError(res, "Get User Error", error);
   }
@@ -94,7 +96,7 @@ export const createUser = async (req, res) => {
       mobile_number: mobile_number || null,
       salary: salary || 0,
       city: city || "",
-      area_id: area_id || "",
+      area_id: area_id,
       role: role || "",
       employee_type: employee_type || "",
       incentive_type: incentive_type || "",
@@ -117,7 +119,6 @@ export const createUser = async (req, res) => {
       await UserLedger.create({
         user_id: user._id,
         salary,
-        date: new Date(),
       });
     }
 
@@ -132,6 +133,21 @@ export const createUser = async (req, res) => {
     return sendError(res, "Failed to create user", 500);
   }
 };
+
+
+// get Booker
+export const getAllBookers = async (req, res) => {
+  try {
+    const bookers = await User.find({ employee_type: "booker" })
+      .select("_id name")
+      .sort({ name: 1 });
+    return successResponse(res, "Bookers fetched", { bookers });
+  } catch (error) {
+    console.error("Error fetching bookers:", error);
+    return sendError(res, "Failed to fetch bookers", 500);
+  }
+};
+
 
 
 
@@ -164,11 +180,16 @@ const deleteUser = async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return sendError(res, "User not found");
-    successResponse(res, "User deleted");
+
+    // ✅ Also delete the associated UserLedger entries
+    await UserLedger.deleteMany({ user_id: user._id });
+
+    successResponse(res, "User and related ledger entries deleted");
   } catch (error) {
     sendError(res, "Delete User Error", error);
   }
 };
+
 
 // TOGGLE user status
 const toggleUserStatus = async (req, res) => {
@@ -204,6 +225,7 @@ const userController = {
   deleteUser,
   toggleUserStatus,
   getUserLedger,
+  getAllBookers,
 };
 
 export default userController;

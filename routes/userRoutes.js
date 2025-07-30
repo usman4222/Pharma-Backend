@@ -5,6 +5,7 @@ import userLedgerController from "../controllers/userLedgerController.js";
 const router = express.Router();
 
 // USERS
+router.get("/bookers", userController.getAllBookers);
 router.get("/", userController.getAllUsers);
 router.get("/:id", userController.getUserById);
 router.post("/", userController.createUser);

@@ -95,6 +95,7 @@ export const createCustomer = async (req, res) => {
       address,
       area_id,
       city,
+      status,
       licence_number,
       licence_expiry,
       ntn_number,
@@ -103,6 +104,7 @@ export const createCustomer = async (req, res) => {
       credit_period,
       credit_limit,
       cnic,
+      booker_id,
       licence_photo,
     } = req.body || {};
 
@@ -110,20 +112,19 @@ export const createCustomer = async (req, res) => {
       return sendError(res, "Name are required fields.");
     }
 
-    // 🔍 Check for existing supplier
-    const existing = await SupplierModel.findOne({
-      $or: [
-        { email: email },
-      ],
-    });
-
-    if (existing) {
-      return sendError(res, "Supplier with same email already exists", 400);
+    if (!booker_id) {
+      return sendError(res, "Booker is required.");
     }
 
-    const booker_id = req.user.id;
+    if (email && email.trim()) {
+      const existing = await SupplierModel.findOne({ email: email.trim() });
 
-    console.log("booker_id", booker_id)
+      // also guard against matching empty strings in DB
+      if (existing && existing.email.trim() !== "") {
+        return sendError(res, "Customer with same email already exists", 400);
+      }
+    }
+
 
     // 📦 Prepare supplier data
     const customerData = {
@@ -146,7 +147,7 @@ export const createCustomer = async (req, res) => {
       credit_period: credit_period || 0,
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
-      status: "active",
+      status: status || "active",
       licence_photo: ""
     };
 
