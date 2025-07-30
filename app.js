@@ -36,7 +36,7 @@ const apiLimiter = rateLimit({
 
 // Allow requests from your frontend
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: ['http://localhost:5173', 'https://pharma-backend-zeta.vercel.app'],
   credentials: true,
 }));
 
