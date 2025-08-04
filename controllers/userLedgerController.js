@@ -1,76 +1,78 @@
 import { User } from "../models/userModel.js";
 import { UserLedger } from "../models/userLedgerModel.js";
 import { sendError, successResponse } from "../utils/response.js";
-import moment from "moment";
 
-// UPDATE or CREATE User Ledger Entry
-const updateUserLedger = async (req, res) => {
+const addUserLedger = async (req, res) => {
   try {
-    const {
-      user_id,
-      gross_salary,
-      incentive,
-      advance,
-      advance_date
-    } = req.body;
+    const { user_id, description, debit, credit, incentive_amount, order_id } = req.body;
 
-    if (!user_id) return sendError(res, "User ID is required");
-
+    // Check if user exists
     const user = await User.findById(user_id);
-    if (!user) return sendError(res, "User not found");
-
-    let data = {};
-    let month = moment().month(); // 0-indexed
-    let year = moment().year();
-
-    if (gross_salary !== undefined && gross_salary !== null)
-      data.gross_salary = gross_salary;
-
-    if (incentive !== undefined && incentive !== null)
-      data.incentive = incentive;
-
-    if (
-      advance !== undefined &&
-      advance !== null &&
-      advance_date !== undefined &&
-      advance_date !== null
-    ) {
-      data.advance = advance;
-      data.advance_date = advance_date;
-
-      const parsed = moment(advance_date);
-      month = parsed.month(); // 0-indexed
-      year = parsed.year();
+    if (!user) {
+      return sendError(res, "User not found", 404);
     }
 
-    const startOfMonth = moment({ year, month }).startOf("month").toDate();
-    const endOfMonth = moment({ year, month }).endOf("month").toDate();
-
-    let existingLedger = await UserLedger.findOne({
+    // Create new ledger entry
+    const newEntry = await UserLedger.create({
       user_id,
-      createdAt: {
-        $gte: startOfMonth,
-        $lte: endOfMonth,
-      },
+      description,
+      debit,
+      credit,
+      incentive_amount,
+      order_id,
+      total_balance: `${Math.abs(credit - debit)} ${credit >= debit ? "CR" : "DB"}`
     });
 
-    if (existingLedger) {
-      await UserLedger.updateOne({ _id: existingLedger._id }, { $set: data });
-    } else {
-      data.user_id = user_id;
-      data.salary = user.salary;
-      await UserLedger.create(data);
+    return successResponse(res, "Ledger entry added successfully", { newEntry });
+  } catch (error) {
+    return sendError(res, error.message);
+  }
+}
+
+
+
+// Get all ledger entries for a specific user with calculated balance
+const getUserLedgers = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if user exists
+    const user = await User.findById(id);
+    if (!user) {
+      return sendError(res, "User not found", 404);
     }
 
-    successResponse(res, "Ledger updated successfully");
+    // Get all ledger entries for the user
+    const ledgers = await UserLedger.find({ user_id: id }).sort({ date: -1 });
+
+    // Calculate totals
+    let totalCredit = 0;
+    let totalDebit = 0;
+
+    ledgers.forEach(entry => {
+      totalCredit += entry.credit;
+      totalDebit += entry.debit;
+    });
+
+    const balance = totalCredit - totalDebit;
+    const balanceDisplay = `${Math.abs(balance)} ${balance >= 0 ? "CR" : "DB"}`;
+
+    return successResponse(res, "User ledgers retrieved successfully", {
+      ledgers,
+      summary: {
+        totalCredit,
+        totalDebit,
+        currentBalance: balanceDisplay
+      }
+    });
   } catch (error) {
-    console.error("Update Ledger Error:", error);
-    sendError(res, "Update Ledger Error", error);
+    return sendError(res, error.message);
   }
-};
+}
 
 const userLedgerController = {
-  updateUserLedger,
+  addUserLedger,
+  getUserLedgers
 };
 
 export default userLedgerController;

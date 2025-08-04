@@ -15,6 +15,7 @@ import productTypeRoute from "./routes/productTypeRoutes.js";
 import purchaseRoute from "./routes/purchaseRoutes.js";  
 import saleRoute from "./routes/saleRoutes.js";
 import packSizeRoute from "./routes/packSizeRoutes.js";
+import userLedgerRoute from "./routes/userLedgerRoute.js";
 import cors from 'cors';
 
 // import healthRoute from "./routes/health.js"; 
@@ -64,5 +65,6 @@ app.use("/api/product-type", apiLimiter, productTypeRoute);
 app.use("/api/purchase", apiLimiter, purchaseRoute);
 app.use("/api/sales", apiLimiter, saleRoute);
 app.use("/api/pack-size", apiLimiter, packSizeRoute);
+app.use("/api/user-ledger", apiLimiter, userLedgerRoute);
 
 export default app;

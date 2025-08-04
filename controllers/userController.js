@@ -115,12 +115,12 @@ export const createUser = async (req, res) => {
     const user = await User.create(userData);
 
     // ✅ Create UserLedger if salary is valid
-    if (salary && salary > 0) {
-      await UserLedger.create({
-        user_id: user._id,
-        salary,
-      });
-    }
+    // if (salary && salary > 0) {
+    //   await UserLedger.create({
+    //     user_id: user._id,
+    //     salary,
+    //   });
+    // }
 
     return successResponse(res, "User created successfully", { user }, 201);
   } catch (error) {
@@ -182,7 +182,7 @@ const deleteUser = async (req, res) => {
     if (!user) return sendError(res, "User not found");
 
     // ✅ Also delete the associated UserLedger entries
-    await UserLedger.deleteMany({ user_id: user._id });
+    // await UserLedger.deleteMany({ user_id: user._id });
 
     successResponse(res, "User and related ledger entries deleted");
   } catch (error) {

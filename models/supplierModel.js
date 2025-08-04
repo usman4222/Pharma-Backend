@@ -48,6 +48,14 @@ const supplierSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Users'
   },
+  receive: {
+    type: Number,
+    default: 0
+  },
+  pay: {
+    type: Number,
+    default: 0
+  },
   status: {
     type: String,
     enum: ['active', 'inactive'],

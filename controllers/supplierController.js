@@ -67,6 +67,7 @@ export const createSupplier = async (req, res) => {
       credit_period,
       credit_limit,
       cnic,
+      booker_id,
       licence_photo,
     } = req.body || {};
 
@@ -84,10 +85,6 @@ export const createSupplier = async (req, res) => {
     if (existing) {
       return sendError(res, "Supplier with same email already exists", 400);
     }
-
-    const booker_id = req.user.id;
-
-    console.log("booker_id",booker_id)
 
     // 📦 Prepare supplier data
     const supplierData = {
