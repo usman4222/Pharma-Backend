@@ -15,8 +15,7 @@ const createPurchase = async (req, res) => {
     try {
         const {
             invoice_number,
-            supplier_id, 
-            // booker_id,
+            supplier_id,
             subtotal,
             total,
             paid_amount,
@@ -61,15 +60,6 @@ const createPurchase = async (req, res) => {
             return sendError(res, "Supplier not found", 404);
         }
 
-        // Check if booker exists (if provided)
-        // if (booker_id) {
-        //     const booker = await User.findById(booker_id).session(session);
-        //     if (!booker) {
-        //         await session.abortTransaction();
-        //         return sendError(res, "Booker not found", 404);
-        //     }
-        // }
-
         // Generate a common batch number for all items in this purchase
         const batchNumber = `BATCH-${Date.now()}`;
 
@@ -77,13 +67,11 @@ const createPurchase = async (req, res) => {
         const newOrder = await Order.create([{
             invoice_number,
             supplier_id,
-            // booker_id,
             subtotal,
             total,
             paid_amount,
             due_amount,
             net_value,
-            // net_value: "1995.00",
             type,
             status
         }], { session });
@@ -96,7 +84,6 @@ const createPurchase = async (req, res) => {
         // Process order items and batches
         const orderItems = [];
         const batchUpdates = [];
-        //   const productUpdates = [];
 
         for (const item of items) {
             // Validate product exists
@@ -149,7 +136,7 @@ const createPurchase = async (req, res) => {
 
         // Update supplier's payable amount (add to pay field)
         await Supplier.findByIdAndUpdate(
-            supplier_idpi
+            supplier_id,
             { $inc: { pay: total } }, // Add to supplier's payable amount
             { session }
         );
@@ -367,11 +354,73 @@ const getProductPurchases = async (req, res) => {
     }
 };
 
+
+const deletePurchase = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const { orderId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            await session.abortTransaction();
+            return sendError(res, 'Invalid order ID', 400);
+        }
+
+        // Fetch the order
+        const order = await Order.findById(orderId).session(session);
+        if (!order) {
+            await session.abortTransaction();
+            return sendError(res, 'Order not found', 404);
+        }
+
+        if (order.type !== 'purchase') {
+            await session.abortTransaction();
+            return sendError(res, 'Cannot delete: Not a purchase order', 400);
+        }
+
+        // Fetch order items
+        const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
+
+        // Decrease batch stock
+        for (const item of orderItems) {
+            await Batch.updateOne(
+                { product_id: item.product_id, batch_number: item.batch },
+                { $inc: { stock: -item.units } },
+                { session }
+            );
+        }
+
+        // Update supplier's payable amount
+        await Supplier.findByIdAndUpdate(
+            order.supplier_id,
+            { $inc: { pay: -order.total } },
+            { session }
+        );
+
+        // Delete order items
+        await OrderItem.deleteMany({ order_id: orderId }).session(session);
+
+        // Delete the order
+        await Order.findByIdAndDelete(orderId).session(session);
+
+        await session.commitTransaction();
+        return successResponse(res, 'Purchase deleted successfully');
+    } catch (error) {
+        await session.abortTransaction();
+        console.error('Delete Purchase Error:', error);
+        return sendError(res, error.message);
+    } finally {
+        session.endSession();
+    }
+};
+
 const purchaseController = {
     createPurchase,
     getPurchasesBySupplier,
     getAllPurchases,
-    getProductPurchases
+    getProductPurchases,
+    deletePurchase
 };
 
 

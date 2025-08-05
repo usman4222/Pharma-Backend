@@ -14,6 +14,7 @@ export const getAllCustomers = async (req, res) => {
 
     const customers = await SupplierModel.find(filter)
       .populate('area_id', 'name city description')
+      .populate('booker_id', 'name')
       .skip(skip)
       .limit(limit);
 

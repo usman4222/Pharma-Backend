@@ -121,7 +121,7 @@ export const logoutUser = async (req, res) => {
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
-    return successResponse(res, "Logout successful", null, 200);
+    return successResponse(res, "Logout successful", {}, 200);
   } catch (error) {
     console.error("Logout error:", error);
     return sendError(res, "Failed to logout", 500);

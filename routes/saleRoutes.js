@@ -3,16 +3,11 @@ import saleController from "../controllers/saleController.js";
 
 const router = express.Router();
 
-// Get all sales
-router.get("/", saleController.getAllSales);
-
-// Get the latest sale
-router.get("/last", saleController.getLastSale);
-
-// Print a specific sale by ID
-router.get("/:id", saleController.printSale);
-
-// Create a new sale
+// create sales 
 router.post("/", saleController.createSale);
+router.get("/", saleController.getAllSales);
+router.get("/:customerId", saleController.getSalesByCustomer);
+router.get("/product-sales/:productId", saleController.getProductSales);
+router.delete("/:orderId", saleController.deleteSale);
 
 export default router;

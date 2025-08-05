@@ -63,7 +63,7 @@ app.use("/api/company", apiLimiter, companyRoute);
 app.use("/api/generic", apiLimiter, genericRoute);
 app.use("/api/product-type", apiLimiter, productTypeRoute);
 app.use("/api/purchase", apiLimiter, purchaseRoute);
-app.use("/api/sales", apiLimiter, saleRoute);
+app.use("/api/sale", apiLimiter, saleRoute);
 app.use("/api/pack-size", apiLimiter, packSizeRoute);
 app.use("/api/user-ledger", apiLimiter, userLedgerRoute);
 

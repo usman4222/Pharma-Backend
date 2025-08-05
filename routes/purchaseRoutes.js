@@ -6,7 +6,8 @@ const router = express.Router();
 // 📥 Get all purchase orders (with pagination and status filter) 
 router.post("/", purchaseController.createPurchase);
 router.get("/:supplierId", purchaseController.getPurchasesBySupplier); 
-router.get("/", purchaseController.getAllPurchases);
+router.get("/", purchaseController.getAllPurchases); 
 router.get("/product-purchases/:productId", purchaseController.getProductPurchases);
+router.delete("/:orderId", purchaseController.deletePurchase);
 
 export default router;

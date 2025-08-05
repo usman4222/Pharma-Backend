@@ -46,7 +46,7 @@ const supplierSchema = new mongoose.Schema({
   },
   booker_id: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Users'
+    ref: 'User'
   },
   receive: {
     type: Number,
