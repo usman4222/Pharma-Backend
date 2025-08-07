@@ -15,7 +15,9 @@ import productTypeRoute from "./routes/productTypeRoutes.js";
 import purchaseRoute from "./routes/purchaseRoutes.js";  
 import saleRoute from "./routes/saleRoutes.js";
 import packSizeRoute from "./routes/packSizeRoutes.js";
-import userLedgerRoute from "./routes/userLedgerRoute.js";
+import userLedgerRoute from "./routes/userLedgerRoute.js"; 
+import freeSaleDescRoute from "./routes/freeSaleDescRoutes.js";
+import freeSaleRoute from "./routes/freeSaleRoutes.js";
 import cors from 'cors';
 
 // import healthRoute from "./routes/health.js"; 
@@ -66,5 +68,7 @@ app.use("/api/purchase", apiLimiter, purchaseRoute);
 app.use("/api/sale", apiLimiter, saleRoute);
 app.use("/api/pack-size", apiLimiter, packSizeRoute);
 app.use("/api/user-ledger", apiLimiter, userLedgerRoute);
+app.use("/api/free-sale-desc", apiLimiter, freeSaleDescRoute);
+app.use("/api/free-sale", apiLimiter, freeSaleRoute);
 
 export default app;
