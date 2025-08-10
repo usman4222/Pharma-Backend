@@ -7,8 +7,7 @@ import { User } from "../models/userModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import mongoose from "mongoose";
 
-// Create a new order
-const createPurchase = async (req, res) => {
+const createEstimatedSale = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -16,26 +15,28 @@ const createPurchase = async (req, res) => {
         const {
             invoice_number,
             supplier_id,
+            booker_id,
             subtotal,
             total,
             paid_amount,
             due_amount,
             net_value,
-            items, // Array of order items
-            type = "purchase",
-            status,
+            due_date,
+            items,
+            type = "estimated"
         } = req.body;
 
-        // Validate ALL required fields
         const requiredFields = {
             invoice_number,
             supplier_id,
+            booker_id,
             subtotal,
             total,
             paid_amount,
             due_amount,
             net_value,
-            items
+            due_date,
+            items,
         };
 
         const missingFields = Object.entries(requiredFields)
@@ -47,193 +48,205 @@ const createPurchase = async (req, res) => {
             return sendError(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
         }
 
-        // Validate type is purchase
-        if (type !== "purchase") {
+        if (type !== "estimated") {
             await session.abortTransaction();
             return sendError(res, "Invalid order type", 400);
         }
 
-        // Check if supplier exists
         const supplier = await Supplier.findById(supplier_id).session(session);
         if (!supplier) {
             await session.abortTransaction();
-            return sendError(res, "Supplier not found", 404);
+            return sendError(res, "Supplier (Customer) not found", 404);
         }
 
-        // Create new order
-        const newOrder = await Order.create([{
-            invoice_number,
-            supplier_id,
-            subtotal,
-            total,
-            paid_amount,
-            due_amount,
-            net_value,
-            type,
-            status
-        }], { session });
+        const booker = await User.findById(booker_id).session(session);
+        if (!booker) {
+            await session.abortTransaction();
+            return sendError(res, "Booker not found", 404);
+        }
+
+        // Validate product stock availability BEFORE creating the order
+        for (const item of items) {
+            const batchStock = await Batch.aggregate([
+                {
+                    $match: { product_id: new mongoose.Types.ObjectId(item.product_id) }
+                },
+                {
+                    $group: {
+                        _id: "$product_id",
+                        totalStock: { $sum: "$stock" }
+                    }
+                }
+            ]);
+
+            const availableStock = batchStock[0]?.totalStock || 0;
+            if (item.units > availableStock) {
+                await session.abortTransaction();
+                return sendError(
+                    res,
+                    `Insufficient stock for product ${item.product_id}. Available: ${availableStock}, Requested: ${item.units}`,
+                    400
+                );
+            }
+        }
+
+        const batchNumber = `BATCH-${Date.now()}`;
+
+        const newOrder = await Order.create(
+            [
+                {
+                    invoice_number,
+                    supplier_id,
+                    booker_id,
+                    subtotal,
+                    total,
+                    paid_amount,
+                    due_amount,
+                    net_value,
+                    due_date,
+                    type,
+                },
+            ],
+            { session }
+        );
 
         if (!newOrder?.length) {
             await session.abortTransaction();
             return sendError(res, "Failed to create order", 500);
         }
 
-        // Process order items and batches
         const orderItems = [];
-        const batchUpdates = [];
 
         for (const item of items) {
-
-            // Validate product exists
             const product = await Product.findById(item.product_id).session(session);
             if (!product) {
                 await session.abortTransaction();
                 return sendError(res, `Product not found: ${item.product_id}`, 404);
             }
 
-            // Create order item
-            const orderItem = await OrderItem.create([{
-                order_id: newOrder[0]._id,
-                product_id: item.product_id,
-                batch: item.batch,
-                expiry: item.expiry,
-                units: item.units,
-                unit_price: item.unit_price,
-                discount: item.discount || 0,
-                total: item.total
-            }], { session });
+            const orderItem = await OrderItem.create(
+                [
+                    {
+                        order_id: newOrder[0]._id,
+                        product_id: item.product_id,
+                        batch: batchNumber,
+                        expiry: item.expiry,
+                        units: item.units,
+                        unit_price: item.unit_price,
+                        discount: item.discount || 0,
+                        total: item.total,
+                    },
+                ],
+                { session }
+            );
 
             orderItems.push(orderItem[0]);
-
-            // Create or update batch
-            batchUpdates.push({
-                updateOne: {
-                    filter: {
-                        product_id: item.product_id,
-                        batch_number: item.batch
-                    },
-                    update: {
-                        $setOnInsert: {
-                            product_id: item.product_id,
-                            batch_number: item.batch,
-                            purchase_price: item.unit_price,
-                            expiry_date: item.expiry
-                        },
-                        $inc: { stock: item.units }
-                    },
-                    upsert: true
-                }
-            });
-
         }
-
-        // Execute all batch updates
-        if (batchUpdates.length) {
-            await Batch.bulkWrite(batchUpdates, { session });
-        }
-
-        // Update supplier's payable amount (add to pay field)
-        await Supplier.findByIdAndUpdate(
-            supplier_id,
-            { $inc: { pay: total } }, // Add to supplier's payable amount
-            { session }
-        );
 
         await session.commitTransaction();
 
-        return successResponse(res, "Purchase order created successfully", {
-            order: newOrder[0],
-            items: orderItems,
-        }, 201);
-
+        return successResponse(
+            res,
+            "Estimated Sale order created successfully",
+            {
+                order: newOrder[0],
+                items: orderItems,
+                batchNumber,
+            },
+            201
+        );
     } catch (error) {
         await session.abortTransaction();
-        console.error("Purchase error:", error);
+        console.error("Sale error:", error);
         return sendError(res, error.message);
     } finally {
         session.endSession();
     }
 };
 
-// Get all purchases by supplier ID
-const getPurchasesBySupplier = async (req, res) => {
+
+// Get all sales by Customer ID
+const getSalesByCustomer = async (req, res) => {
     try {
-        const { supplierId } = req.params;
+        const { customerId } = req.params;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Check if supplier exists
-        const supplier = await Supplier.findById(supplierId);
-        if (!supplier) {
-            return sendError(res, "Supplier not found", 404);
+        // Check if customer exists
+        const customer = await Supplier.findById(customerId);
+        if (!customer) {
+            return sendError(res, "Customer not found", 404);
         }
 
-        // Get purchases with pagination
-        const purchases = await Order.find({ supplier_id: supplierId, type: "purchase" })
-            .populate('supplier_id', 'name')
+        // Get sales with pagination
+        const sales = await Order.find({ supplier_id: customerId, type: "sale" })
+            .populate('supplier_id', 'owner1_name')
+            .populate('booker_id', 'name')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
         // Get total count for pagination
-        const totalPurchases = await Order.countDocuments({ supplier_id: supplierId, type: "purchase" });
-        const totalPages = Math.ceil(totalPurchases / limit);
+        const totalSales = await Order.countDocuments({ supplier_id: customerId, type: "sale" });
+        const totalPages = Math.ceil(totalSales / limit);
         const hasMore = page < totalPages;
 
-        return successResponse(res, "Purchases fetched successfully", {
-            purchases,
+        return successResponse(res, "Sales fetched successfully", {
+            sales,
+            totalSales,
             currentPage: page,
             totalPages,
-            totalItems: totalPurchases,
+            totalItems: totalSales,
             pageSize: limit,
             hasMore
         });
 
     } catch (error) {
-        console.error("Get purchases by supplier error:", error);
-        return sendError(res, "Failed to fetch purchases by supplier");
+        console.error("Get sales by supplier error:", error);
+        return sendError(res, "Failed to fetch sales by supplier");
     }
 };
 
-// Get all purchases by type (purchase)
-const getAllPurchases = async (req, res) => {
+
+// Get all sales by type (sale)
+const getAllEstimatedSales = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Get all purchase orders with pagination
-        const purchases = await Order.find({ type: "purchase" })
+        // Get all sale orders with pagination
+        const estimatedSales = await Order.find({ type: "estimated" })
             .populate('supplier_id', 'owner1_name')
-            // .populate('booker_id', 'name')
+            .populate('booker_id', 'name')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
         // Get total count for pagination
-        const totalPurchases = await Order.countDocuments({ type: "purchase" });
-        const totalPages = Math.ceil(totalPurchases / limit);
+        const totalSales = await Order.countDocuments({ type: "estimated" });
+        const totalPages = Math.ceil(totalSales / limit);
         const hasMore = page < totalPages;
 
-        return successResponse(res, "Purchase orders fetched successfully", {
-            purchases,
+        return successResponse(res, "Estimated Sale orders fetched successfully", {
+            estimatedSales,
             currentPage: page,
             totalPages,
-            totalItems: totalPurchases,
+            totalItems: totalSales,
             pageSize: limit,
             hasMore
         });
 
     } catch (error) {
-        console.error("Get all purchase orders error:", error);
-        return sendError(res, "Failed to fetch purchase orders");
+        console.error("Get all estimated sale orders error:", error);
+        return sendError(res, "Failed to fetch estimated sales orders");
     }
 };
 
 
-// Get all purchases for a specific product
-const getProductPurchases = async (req, res) => {
+// Get all sales for a specific product
+const getProductSales = async (req, res) => {
     try {
         const { productId } = req.params;
         const page = parseInt(req.query.page) || 1;
@@ -250,7 +263,7 @@ const getProductPurchases = async (req, res) => {
         // First get count for pagination
         const totalOrderItems = await OrderItem.countDocuments({
             product_id: productId,
-            'order_id.type': 'purchase'
+            'order_id.type': 'sale'
         }).populate('order_id');
 
         const totalPages = Math.ceil(totalOrderItems / limit);
@@ -271,7 +284,7 @@ const getProductPurchases = async (req, res) => {
             },
             { $unwind: '$order' },
             {
-                $match: { 'order.type': 'purchase' }
+                $match: { 'order.type': 'sale' }
             },
             {
                 $lookup: {
@@ -313,7 +326,7 @@ const getProductPurchases = async (req, res) => {
                 $group: {
                     _id: null,
                     totalStock: { $sum: '$stock' },
-                    productIn: { $sum: '$stock' } // For purchases, product in = stock
+                    productIn: { $sum: '$stock' } // For sales, product in = stock
                 }
             }
         ]);
@@ -324,8 +337,8 @@ const getProductPurchases = async (req, res) => {
             productIn: 0
         };
 
-        return successResponse(res, "Product purchases fetched successfully", {
-            purchases: orderItems,
+        return successResponse(res, "Product sales fetched successfully", {
+            sales: orderItems,
             stockInfo: {
                 productIn: stockInfo.productIn,
                 productOut,
@@ -346,18 +359,20 @@ const getProductPurchases = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Get purchases by product error:", error);
-        return sendError(res, "Failed to fetch product purchases");
+        console.error("Get sales by product error:", error);
+        return sendError(res, "Failed to fetch product sales");
     }
 };
 
 
-const deletePurchase = async (req, res) => {
+const deleteEstimatedSale = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
         const { orderId } = req.params;
+
+        console.log("orderId", orderId)
 
         if (!mongoose.Types.ObjectId.isValid(orderId)) {
             await session.abortTransaction();
@@ -371,40 +386,13 @@ const deletePurchase = async (req, res) => {
             return sendError(res, 'Order not found', 404);
         }
 
-        if (order.type !== 'purchase') {
+        if (order.type !== 'estimated') {
             await session.abortTransaction();
-            return sendError(res, 'Cannot delete: Not a purchase order', 400);
+            return sendError(res, 'Cannot delete: Not a sale order', 400);
         }
 
         // Fetch order items
         const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
-
-        // Decrease batch stock
-        for (const item of orderItems) {
-            const batchUpdate = await Batch.findOneAndUpdate(
-                {
-                    product_id: item.product_id,
-                    batch_number: item.batch
-                },
-                { $inc: { stock: -item.units } },
-                { session, new: true }
-            );
-
-            // Delete batch if stock reaches zero or below
-            if (batchUpdate.stock <= 0) {
-                await Batch.deleteOne(
-                    { _id: batchUpdate._id },
-                    { session }
-                );
-            }
-        }
-
-        // Update supplier's payable amount
-        await Supplier.findByIdAndUpdate(
-            order.supplier_id,
-            { $inc: { pay: -order.total } },
-            { session }
-        );
 
         // Delete order items
         await OrderItem.deleteMany({ order_id: orderId }).session(session);
@@ -413,23 +401,24 @@ const deletePurchase = async (req, res) => {
         await Order.findByIdAndDelete(orderId).session(session);
 
         await session.commitTransaction();
-        return successResponse(res, 'Purchase deleted successfully');
+        return successResponse(res, 'Estimated Sale deleted successfully');
     } catch (error) {
         await session.abortTransaction();
-        console.error('Delete Purchase Error:', error);
-        return sendError(res, error.message);
+        console.error('Delete Estimated Sale Error:', error);
+        return sendError(res, error.message || 'Failed to delete sale');
     } finally {
         session.endSession();
     }
 };
 
-const purchaseController = {
-    createPurchase,
-    getPurchasesBySupplier,
-    getAllPurchases,
-    getProductPurchases,
-    deletePurchase
+
+// Export all like you mentioned
+const estimatedSaleController = {
+    createEstimatedSale,
+    getAllEstimatedSales,
+    //   getSalesByCustomer,
+    //   getProductSales,
+    deleteEstimatedSale
 };
 
-
-export default purchaseController;
+export default estimatedSaleController;

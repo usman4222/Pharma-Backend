@@ -27,10 +27,10 @@ const createSale = async (req, res) => {
       status,
     } = req.body;
 
+    // 1. Validate required fields including batch numbers
     const requiredFields = {
       invoice_number,
       supplier_id,
-      booker_id,
       subtotal,
       total,
       paid_amount,
@@ -49,50 +49,58 @@ const createSale = async (req, res) => {
       return sendError(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
     }
 
+    // 2. Validate each item has a batch number
+    for (const item of items) {
+      if (!item.batch || item.batch.trim() === '') {
+        await session.abortTransaction();
+        return sendError(res, `Batch number is required for all items`, 400);
+      }
+    }
+
     if (type !== "sale") {
       await session.abortTransaction();
       return sendError(res, "Invalid order type", 400);
     }
 
+    // 3. Validate supplier exists
     const supplier = await Supplier.findById(supplier_id).session(session);
     if (!supplier) {
       await session.abortTransaction();
       return sendError(res, "Supplier (Customer) not found", 404);
     }
 
-    const booker = await User.findById(booker_id).session(session);
-    if (!booker) {
-      await session.abortTransaction();
-      return sendError(res, "Booker not found", 404);
+    // 4. Validate booker exists if booker_id is provided
+    if (booker_id) {
+      const booker = await User.findById(booker_id).session(session);
+      if (!booker) {
+        await session.abortTransaction();
+        return sendError(res, "Booker not found", 404);
+      }
     }
 
-    // Validate product stock availability BEFORE creating the order
+    // 5. Validate product stock availability for each batch
     for (const item of items) {
-      const batchStock = await Batch.aggregate([
-        {
-          $match: { product_id: new mongoose.Types.ObjectId(item.product_id) }
-        },
-        {
-          $group: {
-            _id: "$product_id",
-            totalStock: { $sum: "$stock" }
-          }
-        }
-      ]);
+      const batch = await Batch.findOne({
+        product_id: item.product_id,
+        batch_number: item.batch
+      }).session(session);
 
-      const availableStock = batchStock[0]?.totalStock || 0;
-      if (item.units > availableStock) {
+      if (!batch) {
+        await session.abortTransaction();
+        return sendError(res, `Batch ${item.batch} not found for product ${item.product_id}`, 404);
+      }
+
+      if (item.units > batch.stock) {
         await session.abortTransaction();
         return sendError(
           res,
-          `Insufficient stock for product ${item.product_id}. Available: ${availableStock}, Requested: ${item.units}`,
+          `Insufficient stock in batch ${item.batch}. Available: ${batch.stock}`,
           400
         );
       }
     }
 
-    const batchNumber = `BATCH-${Date.now()}`;
-
+    // 6. Create the order
     const newOrder = await Order.create(
       [
         {
@@ -117,6 +125,7 @@ const createSale = async (req, res) => {
       return sendError(res, "Failed to create order", 500);
     }
 
+    // 7. Create order items and update batches
     const orderItems = [];
     const batchUpdates = [];
 
@@ -132,7 +141,7 @@ const createSale = async (req, res) => {
           {
             order_id: newOrder[0]._id,
             product_id: item.product_id,
-            batch: batchNumber,
+            batch: item.batch,
             expiry: item.expiry,
             units: item.units,
             unit_price: item.unit_price,
@@ -149,26 +158,21 @@ const createSale = async (req, res) => {
         updateOne: {
           filter: {
             product_id: item.product_id,
-            batch_number: batchNumber,
+            batch_number: item.batch,
           },
           update: {
-            $setOnInsert: {
-              product_id: item.product_id,
-              batch_number: batchNumber,
-              purchase_price: item.unit_price,
-              expiry_date: item.expiry,
-            },
             $inc: { stock: -item.units },
           },
-          upsert: true,
         },
       });
     }
 
+    // 8. Execute batch updates
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
+    // 9. Update supplier balance
     await Supplier.findByIdAndUpdate(
       supplier_id,
       { $inc: { receive: total } },
@@ -183,7 +187,6 @@ const createSale = async (req, res) => {
       {
         order: newOrder[0],
         items: orderItems,
-        batchNumber,
       },
       201
     );
@@ -404,7 +407,7 @@ const deleteSale = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    console.log("orderId",orderId)
+    console.log("orderId", orderId)
 
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       await session.abortTransaction();

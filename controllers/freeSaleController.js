@@ -6,7 +6,7 @@ import { ProductModel as Product } from "../models/productModel.js";
 
 const createFreeSale = async (req, res) => {
     const session = await mongoose.startSession();
-    
+
     try {
         await session.startTransaction();
 
@@ -28,7 +28,7 @@ const createFreeSale = async (req, res) => {
         // Process batches and quantity deduction
         const batches = await Batch.find({ product_id }).sort({ expiry: 1 }).session(session);
         let remainingQty = quantity;
-        
+
         for (const batchItem of batches) {
             if (remainingQty <= 0) break;
             const deductQty = Math.min(batchItem.stock, remainingQty);
@@ -58,8 +58,8 @@ const createFreeSale = async (req, res) => {
         await session.commitTransaction();
 
         // Convert to plain object to remove circular references
-        const responseData = savedFreeSale.toObject(); 
-        return successResponse(res, "Free sale created successfully", responseData, 201);
+        const freeSales = savedFreeSale.toObject();
+        return successResponse(res, "Free sale created successfully", { freeSales }, 201);
 
     } catch (error) {
         if (session.inTransaction()) {
