@@ -1,17 +1,22 @@
 import express from "express";
 import supplierController from "../controllers/supplierController.js";
-import tokenValidations from "../middleware/tokenValidation.js"; 
+import { createUploader } from "../utils/upload.js";
 
 const router = express.Router();
+
+// Create uploader for "suppliers" folder
+const uploadSuppliers = createUploader("suppliers");
 
 router.get("/", supplierController.getAllSuppliers);
 router.get("/search", supplierController.searchSuppliers);
 router.get("/:id", supplierController.getSupplierById);
-router.post("/", 
-    // tokenValidations.verifyToken, tokenValidations.authorizeRoles("admin"),
- supplierController.createSupplier);
+router.post(
+    "/",
+    uploadSuppliers.single("licence_photo"),
+    supplierController.createSupplier
+);
 router.put("/:id", supplierController.updateSupplier);
 router.delete("/:id", supplierController.deleteSupplier);
-router.patch("/status", supplierController.toggleSupplierStatus); 
+router.patch("/status", supplierController.toggleSupplierStatus);
 
 export default router;

@@ -17,7 +17,7 @@ const supplierSchema = new mongoose.Schema({
   },
   owner1_phone_number: {
     type: String,
-    required: true,
+    // required: true,
     trim: true
   },
   owner2_phone_number: {

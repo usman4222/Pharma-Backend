@@ -4,37 +4,28 @@ import { sendError, successResponse } from "../utils/response.js";
 // Fetch paginated customer list
 export const getAllCustomers = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
     const filter = {
       $or: [{ role: "customer" }, { role: "both" }],
     };
 
+    // Fetch all matching customers 
     const customers = await SupplierModel.find(filter)
       .populate('area_id', 'name city description')
-      .populate('booker_id', 'name')
-      .skip(skip)
-      .limit(limit);
+      .populate('booker_id', 'name');
 
-    const totalCustomers = await SupplierModel.countDocuments(filter);
-    const totalPages = Math.ceil(totalCustomers / limit);
-    const hasMore = page < totalPages;
+    // Total count of customers (optional, just for info)
+    const totalCustomers = customers.length;
 
     return successResponse(res, "Customers fetched successfully", {
       customers,
-      currentPage: page,
-      totalPages,
       totalItems: totalCustomers,
-      pageSize: limit,
-      hasMore,
     });
   } catch (error) {
     console.error("Fetch Customers Error:", error);
     return sendError(res, "Failed to fetch customers", 500);
   }
 };
+
 
 // Get all customers without pagination (for dropdowns etc.)
 export const getCustomerList = async (req, res) => {
@@ -106,7 +97,6 @@ export const createCustomer = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
-      licence_photo,
     } = req.body || {};
 
     if (!owner1_name) {
@@ -149,7 +139,7 @@ export const createCustomer = async (req, res) => {
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
       status: status || "active",
-      licence_photo: ""
+      licence_photo: req.file ? `/uploads/customers/${req.file.filename}` : "",
     };
 
     const customer = await SupplierModel.create(customerData);

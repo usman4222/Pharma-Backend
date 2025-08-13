@@ -10,12 +10,33 @@ const createFreeSale = async (req, res) => {
     try {
         await session.startTransaction();
 
-        const { product_id, desc_id, sale_person, batch, expiry, quantity, sub_total } = req.body;
+        const { invoice_number, product_id, desc_id, sale_person, batch, expiry, quantity, sub_total } = req.body;
 
         // Validate required fields
         if (!product_id || !quantity) {
             await session.abortTransaction();
             return sendError(res, "Product ID and quantity are required", 400);
+        }
+
+        // Generate invoice number if not provided
+        let finalInvoiceNumber = invoice_number;
+        if (!finalInvoiceNumber) {
+            // Get the last free sale to generate incremental number
+            const lastFreeSale = await FreeSale.findOne().sort({ createdAt: -1 }).session(session);
+            
+            // Start from FREE-0001 if no sales exist yet
+            const lastNumber = lastFreeSale?.invoice_number 
+                ? parseInt(lastFreeSale.invoice_number.split('-')[1]) || 0 
+                : 0;
+                
+            finalInvoiceNumber = `FREE-${(lastNumber + 1).toString().padStart(4, '0')}`;
+        }
+
+        // Check if invoice number already exists
+        const existingSale = await FreeSale.findOne({ invoice_number: finalInvoiceNumber }).session(session);
+        if (existingSale) {
+            await session.abortTransaction();
+            return sendError(res, "Invoice number already exists", 400);
         }
 
         // Check if product exists
@@ -44,6 +65,7 @@ const createFreeSale = async (req, res) => {
 
         // Create the sale record
         const newFreeSale = new FreeSale({
+            invoice_number: finalInvoiceNumber,
             product_id,
             desc_id,
             sale_person,

@@ -3,40 +3,30 @@ import { UserLedger } from "../models/userLedgerModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+
 // GET all users (filtered by status)
 const getAllUsers = async (req, res) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status } = req.query;
 
     const query = {};
     if (status !== undefined) {
       query.status = status;
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const totalUsers = await User.countDocuments(query);
+    // Fetch all users without pagination
     const users = await User.find(query)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .populate('area_id', 'name city description');
-
-    const totalPages = Math.ceil(totalUsers / parseInt(limit));
-    const hasMore = page < totalPages;
 
     return successResponse(res, "Users fetched successfully", {
       users,
-      currentPage: parseInt(page),
-      totalPages,
-      totalItems: totalUsers,
-      pageSize: parseInt(limit),
-      hasMore,
+      totalItems: users.length 
     });
   } catch (error) {
-    return sendError(res, "Get Users Error", error);
+    return sendError(res, "Failed to fetch users", error);
   }
 };
-
 
 
 
@@ -70,23 +60,38 @@ export const createUser = async (req, res) => {
       incentive_percentage,
       join_date,
       cnic,
-      profile_photo,
-      cnic_front,
-      cnic_back,
-      cheque_photo,
-      e_stamp,
-      status,
+      status
     } = req.body;
 
-    // ✅ Required field validation
-    if (!name || !father_name || !email || !password) {
-      return sendError(res, "name, father_name, email, and password are required", 400);
+    // Required field validation
+    if (!name) {
+      return sendError(res, "Name is required", 400);
     }
 
-    // ✅ Hash password before saving
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ✅ Prepare user data
+    // Prepare file paths
+    const files = req.files || {};
+    const filePaths = {
+      profile_photo: files.profile_photo?.[0]?.filename
+        ? `/uploads/users/${files.profile_photo[0].filename}`
+        : "",
+      cnic_front: files.cnic_front?.[0]?.filename
+        ? `/uploads/users/${files.cnic_front[0].filename}`
+        : "",
+      cnic_back: files.cnic_back?.[0]?.filename
+        ? `/uploads/users/${files.cnic_back[0].filename}`
+        : "",
+      cheque_photo: files.cheque_photo?.[0]?.filename
+        ? `/uploads/users/${files.cheque_photo[0].filename}`
+        : "",
+      e_stamp: files.e_stamp?.[0]?.filename
+        ? `/uploads/users/${files.e_stamp[0].filename}`
+        : ""
+    };
+
+    // Create user data
     const userData = {
       name,
       father_name,
@@ -96,37 +101,23 @@ export const createUser = async (req, res) => {
       mobile_number: mobile_number || null,
       salary: salary || 0,
       city: city || "",
-      area_id: area_id,
+      area_id,
       role: role || "",
       employee_type: employee_type || "",
       incentive_type: incentive_type || "",
       incentive_percentage: incentive_percentage || 0,
       join_date: join_date || null,
       cnic: cnic || "",
-      profile_photo: profile_photo || "",
-      cnic_front: cnic_front || "",
-      cnic_back: cnic_back || "",
-      cheque_photo: cheque_photo || "",
-      e_stamp: e_stamp || "",
       status: status || "active",
+      ...filePaths // Spread all file paths
     };
 
-    // ✅ Create user
+    // Create user
     const user = await User.create(userData);
-
-    // ✅ Create UserLedger if salary is valid
-    // if (salary && salary > 0) {
-    //   await UserLedger.create({
-    //     user_id: user._id,
-    //     salary,
-    //   });
-    // }
-
     return successResponse(res, "User created successfully", { user }, 201);
+
   } catch (error) {
     console.error("Create User Error:", error);
-
-    // Duplicate key error handling
     if (error.code === 11000 && error.keyPattern?.email) {
       return sendError(res, "A user with this email already exists", 400);
     }

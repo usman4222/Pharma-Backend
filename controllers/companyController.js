@@ -4,7 +4,10 @@ import { sendError, successResponse } from "../utils/response.js";
 // Create Company
 export const createCompany = async (req, res) => {
   try {
-    const { name, ptcl_number, phone_number, address, image, email, city } = req.body;
+    console.log("REQ.FILE:", req.file);
+    console.log("REQ.BODY:", req.body);
+
+    const { name, ptcl_number, phone_number, address, email, city } = req.body;
 
     if (!name) {
       return sendError(res, "Company name is required", 400);
@@ -15,9 +18,9 @@ export const createCompany = async (req, res) => {
       ptcl_number: ptcl_number || "",
       phone_number: phone_number || "",
       address: address || "",
-      image: image || "",
       email: email || "",
       city: city || "",
+      company_logo: req.file ? `/uploads/company/${req.file.filename}` : "",
     });
 
     return successResponse(res, "Company created successfully", { company }, 201);
@@ -26,6 +29,7 @@ export const createCompany = async (req, res) => {
     return sendError(res, "Failed to create company", 500);
   }
 };
+
 
 // Get All Companies with Pagination
 export const getAllCompanies = async (req, res) => {

@@ -23,13 +23,13 @@ const createEstimatedSale = async (req, res) => {
             net_value,
             due_date,
             items,
-            type = "estimated"
+            type = "estimated",
+            status = "completed"
         } = req.body;
 
         const requiredFields = {
             invoice_number,
             supplier_id,
-            booker_id,
             subtotal,
             total,
             paid_amount,
@@ -59,10 +59,12 @@ const createEstimatedSale = async (req, res) => {
             return sendError(res, "Supplier (Customer) not found", 404);
         }
 
-        const booker = await User.findById(booker_id).session(session);
-        if (!booker) {
-            await session.abortTransaction();
-            return sendError(res, "Booker not found", 404);
+        if (booker_id) {
+            const booker = await User.findById(booker_id).session(session);
+            if (!booker) {
+                await session.abortTransaction();
+                return sendError(res, "Booker not found", 404);
+            }
         }
 
         // Validate product stock availability BEFORE creating the order
@@ -89,8 +91,6 @@ const createEstimatedSale = async (req, res) => {
                 );
             }
         }
-
-        const batchNumber = `BATCH-${Date.now()}`;
 
         const newOrder = await Order.create(
             [
@@ -129,7 +129,7 @@ const createEstimatedSale = async (req, res) => {
                     {
                         order_id: newOrder[0]._id,
                         product_id: item.product_id,
-                        batch: batchNumber,
+                        batch: item.batch,
                         expiry: item.expiry,
                         units: item.units,
                         unit_price: item.unit_price,
@@ -151,7 +151,6 @@ const createEstimatedSale = async (req, res) => {
             {
                 order: newOrder[0],
                 items: orderItems,
-                batchNumber,
             },
             201
         );

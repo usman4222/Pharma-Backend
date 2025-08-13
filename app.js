@@ -19,6 +19,8 @@ import userLedgerRoute from "./routes/userLedgerRoute.js";
 import freeSaleDescRoute from "./routes/freeSaleDescRoutes.js"; 
 import freeSaleRoute from "./routes/freeSaleRoutes.js";
 import estimatedSaleRoute from "./routes/estimatedSaleRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
+
 import cors from 'cors';
 
 // import healthRoute from "./routes/health.js"; 
@@ -72,5 +74,10 @@ app.use("/api/user-ledger", apiLimiter, userLedgerRoute);
 app.use("/api/free-sale-desc", apiLimiter, freeSaleDescRoute);
 app.use("/api/free-sale", apiLimiter, freeSaleRoute);
 app.use("/api/estimated-sale", apiLimiter, estimatedSaleRoute);
+
+
+
+app.use("/uploads", express.static("uploads")); // Serve uploaded images
+app.use("/api/upload", uploadRoutes);
 
 export default app;

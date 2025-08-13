@@ -3,30 +3,18 @@ import { sendError, successResponse } from "../utils/response.js";
 
 export const getAllSuppliers = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
     const filter = {
       $or: [{ role: "supplier" }, { role: "both" }],
     };
 
-    const suppliers = await SupplierModel.find(filter)
-      .populate('area_id', 'name city description')
-      .skip(skip)
-      .limit(limit);
+    // Get all suppliers ()
+    const suppliers = await SupplierModel.find(filter).populate('area_id', 'name city description');
 
-    const totalSuppliers = await SupplierModel.countDocuments(filter);
-    const totalPages = Math.ceil(totalSuppliers / limit);
-    const hasMore = page < totalPages;
+    const totalSuppliers = suppliers.length;
 
     return successResponse(res, "Suppliers fetched successfully", {
       suppliers,
-      currentPage: page,
-      totalPages,
       totalItems: totalSuppliers,
-      pageSize: limit,
-      hasMore,
     });
   } catch (error) {
     console.error("Fetch Suppliers Error:", error);
@@ -34,10 +22,11 @@ export const getAllSuppliers = async (req, res) => {
   }
 };
 
+
 export const getSupplierById = async (req, res) => {
   try {
     const supplier = await SupplierModel.findById(req.params.id)
-    .populate('area_id', 'name')
+      .populate('area_id', 'name')
     if (!supplier) return sendError(res, "Supplier not found", 404);
     return successResponse(res, "Supplier fetched", { supplier });
   } catch (error) {
@@ -68,11 +57,10 @@ export const createSupplier = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
-      licence_photo,
     } = req.body || {};
 
     if (!owner1_name) {
-      return sendError(res, "Name and Area are required fields.");
+      return sendError(res, "Name are required fields.");
     }
 
     // 🔍 Check for existing supplier
@@ -91,7 +79,7 @@ export const createSupplier = async (req, res) => {
       owner1_name,
       owner2_name: owner2_name || "",
       owner1_phone_number: owner1_phone_number || "",
-      owner2_phone_number: owner2_phone_number || "" ,
+      owner2_phone_number: owner2_phone_number || "",
       email: email || "",
       phone_number: phone_number || "",
       ptcl_number: ptcl_number || "",
@@ -108,7 +96,7 @@ export const createSupplier = async (req, res) => {
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
       status: "active",
-      licence_photo: ""
+      licence_photo: req.file ? `/uploads/suppliers/${req.file.filename}` : "",
     };
 
     const supplier = new SupplierModel(supplierData);

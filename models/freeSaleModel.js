@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const freeSaleSchema = new mongoose.Schema(
     {
+        invoice_number: { type: String, required: true },
         product_id: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Product',

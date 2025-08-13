@@ -125,15 +125,132 @@ export const getAllProducts = async (req, res) => {
         }
       },
 
-      // Add calculated stock
+      // Lookup Purchase Order Items
+      {
+        $lookup: {
+          from: "orderitems",
+          localField: "_id",
+          foreignField: "product_id",
+          as: "purchaseItems",
+          pipeline: [
+            {
+              $lookup: {
+                from: "orders",
+                localField: "order_id",
+                foreignField: "_id",
+                as: "order"
+              }
+            },
+            { $unwind: "$order" },
+            { $match: { "order.type": "purchase" } }
+          ]
+        }
+      },
+
+      // Lookup Sale Order Items
+      {
+        $lookup: {
+          from: "orderitems",
+          localField: "_id",
+          foreignField: "product_id",
+          as: "saleItems",
+          pipeline: [
+            {
+              $lookup: {
+                from: "orders",
+                localField: "order_id",
+                foreignField: "_id",
+                as: "order"
+              }
+            },
+            { $unwind: "$order" },
+            { $match: { "order.type": "sale" } }
+          ]
+        }
+      },
+
+      // Add calculated fields
       {
         $addFields: {
+          // Current stock from batches
           stock: {
             $sum: {
               $map: {
                 input: "$batches",
                 as: "batch",
                 in: { $ifNull: ["$$batch.stock", 0] }
+              }
+            }
+          },
+          // Total purchased units
+          totalPurchased: {
+            $sum: {
+              $map: {
+                input: "$purchaseItems",
+                as: "item",
+                in: { $ifNull: ["$$item.units", 0] }
+              }
+            }
+          },
+          // Total sold units
+          totalSold: {
+            $sum: {
+              $map: {
+                input: "$saleItems",
+                as: "item",
+                in: { $ifNull: ["$$item.units", 0] }
+              }
+            }
+          },
+          // Remaining stock (purchased - sold)
+          remainingStock: {
+            $subtract: [
+              {
+                $sum: {
+                  $map: {
+                    input: "$purchaseItems",
+                    as: "item",
+                    in: { $ifNull: ["$$item.units", 0] }
+                  }
+                }
+              },
+              {
+                $sum: {
+                  $map: {
+                    input: "$saleItems",
+                    as: "item",
+                    in: { $ifNull: ["$$item.units", 0] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+
+      // Project only necessary fields
+      {
+        $project: {
+          name: 1,
+          item_code: 1,
+          company: { name: 1 },
+          generic: { name: 1 },
+          productType: { name: 1 },
+          packSize: { name: 1 },
+          retail_price: 1,
+          trade_price: 1,
+          stock: 1,
+          totalPurchased: 1,
+          totalSold: 1,
+          remainingStock: 1,
+          batches: {
+            $map: {
+              input: "$batches",
+              as: "batch",
+              in: {
+                batch_number: "$$batch.batch_number",
+                expiry_date: "$$batch.expiry_date",
+                stock: "$$batch.stock"
               }
             }
           }
@@ -164,13 +281,13 @@ export const getAllProducts = async (req, res) => {
   }
 };
 
-
 export const getProductById = async (req, res) => {
   try {
     const { id } = req.params;
 
     const product = await Product.aggregate([
       { $match: { _id: new mongoose.Types.ObjectId(id) } },
+
       // Lookup Company
       {
         $lookup: {
@@ -199,7 +316,7 @@ export const getProductById = async (req, res) => {
           from: "producttypes",
           localField: "product_type",
           foreignField: "_id",
-          as: "product_type"  // Changed to match your schema
+          as: "product_type"
         }
       },
       { $unwind: { path: "$product_type", preserveNullAndEmptyArrays: true } },
@@ -210,7 +327,7 @@ export const getProductById = async (req, res) => {
           from: "packsizes",
           localField: "pack_size_id",
           foreignField: "_id",
-          as: "pack_size"  // Changed to match your schema
+          as: "pack_size"
         }
       },
       { $unwind: { path: "$pack_size", preserveNullAndEmptyArrays: true } },
@@ -225,19 +342,163 @@ export const getProductById = async (req, res) => {
         }
       },
 
-      // Add calculated stock
+      // Lookup Purchase Order Items
+      {
+        $lookup: {
+          from: "orderitems",
+          localField: "_id",
+          foreignField: "product_id",
+          as: "purchaseItems",
+          pipeline: [
+            {
+              $lookup: {
+                from: "orders",
+                localField: "order_id",
+                foreignField: "_id",
+                as: "order"
+              }
+            },
+            { $unwind: "$order" },
+            { $match: { "order.type": "purchase" } }
+          ]
+        }
+      },
+
+      // Lookup Sale Order Items
+      {
+        $lookup: {
+          from: "orderitems",
+          localField: "_id",
+          foreignField: "product_id",
+          as: "saleItems",
+          pipeline: [
+            {
+              $lookup: {
+                from: "orders",
+                localField: "order_id",
+                foreignField: "_id",
+                as: "order"
+              }
+            },
+            { $unwind: "$order" },
+            { $match: { "order.type": "sale" } }
+          ]
+        }
+      },
+
+      // Add calculated fields
       {
         $addFields: {
-          current_stock: {  // Changed to match your schema
-            $sum: "$batches.quantity"  // Simplified
+          // Current stock from batches
+          current_stock: {
+            $sum: {
+              $map: {
+                input: "$batches",
+                as: "batch",
+                in: { $ifNull: ["$$batch.stock", 0] }
+              }
+            }
           },
-          // Add calculated sale price
+          stock: { // Also add stock field for consistency
+            $sum: {
+              $map: {
+                input: "$batches",
+                as: "batch",
+                in: { $ifNull: ["$$batch.stock", 0] }
+              }
+            }
+          },
+          // Total purchased units
+          total_purchased: {
+            $sum: {
+              $map: {
+                input: "$purchaseItems",
+                as: "item",
+                in: { $ifNull: ["$$item.units", 0] }
+              }
+            }
+          },
+          // Total sold units
+          total_sold: {
+            $sum: {
+              $map: {
+                input: "$saleItems",
+                as: "item",
+                in: { $ifNull: ["$$item.units", 0] }
+              }
+            }
+          },
+          // Remaining stock (purchased - sold)
+          remaining_stock: {
+            $subtract: [
+              {
+                $sum: {
+                  $map: {
+                    input: "$purchaseItems",
+                    as: "item",
+                    in: { $ifNull: ["$$item.units", 0] }
+                  }
+                }
+              },
+              {
+                $sum: {
+                  $map: {
+                    input: "$saleItems",
+                    as: "item",
+                    in: { $ifNull: ["$$item.units", 0] }
+                  }
+                }
+              }
+            ]
+          },
+          // Calculated sale price with tax
           calculated_sale_price: {
             $add: [
               "$retail_price",
               { $multiply: ["$retail_price", { $divide: ["$sales_tax", 100] }] }
             ]
+          },
+          // Detailed batches information
+          detailed_batches: {
+            $map: {
+              input: "$batches",
+              as: "batch",
+              in: {
+                batch_number: "$$batch.batch_number",
+                expiry_date: "$$batch.expiry_date",
+                stock: "$$batch.stock",
+                purchase_price: "$$batch.purchase_price",
+                retail_price: "$$batch.retail_price",
+                trade_price: "$$batch.trade_price",
+                mrp: "$$batch.mrp"
+              }
+            }
           }
+        }
+      },
+
+      // Project only necessary fields
+      {
+        $project: {
+          name: 1,
+          item_code: 1,
+          description: 1,
+          company: 1,
+          generic: 1,
+          product_type: 1,
+          pack_size: 1,
+          retail_price: 1,
+          trade_price: 1,
+          sales_tax: 1,
+          current_stock: 1,
+          stock: 1,
+          total_purchased: 1,
+          total_sold: 1,
+          remaining_stock: 1,
+          calculated_sale_price: 1,
+          batches: "$detailed_batches",
+          createdAt: 1,
+          updatedAt: 1
         }
       }
     ]);
@@ -246,8 +507,8 @@ export const getProductById = async (req, res) => {
       return sendError(res, "Product not found", 404);
     }
 
-    return successResponse(res, "Product fetched successfully", { 
-      product: product[0]  // Return first (and only) document
+    return successResponse(res, "Product fetched successfully", {
+      product: product[0]
     }, 200);
   } catch (error) {
     console.error("Get Product Error:", error);

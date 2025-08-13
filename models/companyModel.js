@@ -18,9 +18,8 @@ const companySchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    image: {
+    company_logo: {
       type: String,
-      default: null,
     },
     email: {
       type: String,
