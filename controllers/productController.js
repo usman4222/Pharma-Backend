@@ -17,10 +17,15 @@ export const createProduct = async (req, res) => {
       product_type,
       retail_price,
       trade_price,
+      trade_price_percentage,
       wholesale_price,
+      wholesale_price_percentage,
       federal_tax,
+      federal_tax_percentage,
       gst,
+      gst_percentage,
       sales_tax,
+      sales_tax_percentage,
     } = req.body;
 
     // ✅ Required fields validation
@@ -50,10 +55,15 @@ export const createProduct = async (req, res) => {
       product_type,
       retail_price,
       trade_price: trade_price || 0,
+      trade_price_percentage: trade_price_percentage || 0,
       wholesale_price: wholesale_price || 0,
+      wholesale_price_percentage: wholesale_price_percentage || 0,
       federal_tax: federal_tax || 0,
+      federal_tax_percentage: federal_tax_percentage || 0,
       gst: gst || 0,
+      gst_percentage: gst_percentage || 0,
       sales_tax: sales_tax || 0,
+      sales_tax_percentage: sales_tax_percentage || 0,
     });
 
     return successResponse(res, "Product created successfully", { product }, 201);
@@ -239,6 +249,15 @@ export const getAllProducts = async (req, res) => {
           packSize: { name: 1 },
           retail_price: 1,
           trade_price: 1,
+          trade_price_percentage: 1,
+          wholesale_price: 1,
+          wholesale_price_percentage: 1,
+          federal_tax: 1,
+          federal_tax_percentage: 1,
+          gst: 1,
+          gst_percentage: 1,
+          sales_tax: 1,
+          sales_tax_percentage: 1,
           stock: 1,
           totalPurchased: 1,
           totalSold: 1,
@@ -483,20 +502,43 @@ export const getProductById = async (req, res) => {
           name: 1,
           item_code: 1,
           description: 1,
-          company: 1,
-          generic: 1,
-          product_type: 1,
-          pack_size: 1,
+          company_id: 1,
+          company: { name: 1, _id: 1 },
+          generic_id: 1,
+          generic: { name: 1, _id: 1 },
+          product_type_id: 1,
+          product_type: { name: 1, _id: 1 },
+          pack_size_id: 1,
+          pack_size: { name: 1, _id: 1 },
+          carton_size: 1,
+          quantity_alert: 1,
+          barcode_symbology: 1,
+
+          // Pricing fields
           retail_price: 1,
           trade_price: 1,
+          trade_price_percentage: 1,
+          wholesale_price: 1,
+          wholesale_price_percentage: 1,
+          federal_tax: 1,
+          federal_tax_percentage: 1,
+          gst: 1,
+          gst_percentage: 1,
           sales_tax: 1,
+          sales_tax_percentage: 1,
+
+          // Stock information
           current_stock: 1,
           stock: 1,
           total_purchased: 1,
           total_sold: 1,
           remaining_stock: 1,
           calculated_sale_price: 1,
+
+          // Batches
           batches: "$detailed_batches",
+
+          // Timestamps
           createdAt: 1,
           updatedAt: 1
         }
