@@ -70,9 +70,48 @@ const getUserLedgers = async (req, res) => {
   }
 }
 
+
+// Edit an existing ledger entry
+const editUserLedger = async (req, res) => {
+  try {
+    const { id } = req.params; // Ledger entry ID
+    const { description, debit, credit, incentive_amount, order_id } = req.body;
+
+    // Find ledger entry
+    const ledgerEntry = await UserLedger.findById(id);
+    if (!ledgerEntry) {
+      return sendError(res, "Ledger entry not found", 404);
+    }
+
+    // Optional: Check if related user exists
+    const user = await User.findById(ledgerEntry.user_id);
+    if (!user) {
+      return sendError(res, "User not found", 404);
+    }
+
+    // Update fields
+    ledgerEntry.description = description ?? ledgerEntry.description;
+    ledgerEntry.debit = debit ?? ledgerEntry.debit;
+    ledgerEntry.credit = credit ?? ledgerEntry.credit;
+    ledgerEntry.incentive_amount = incentive_amount ?? ledgerEntry.incentive_amount;
+    ledgerEntry.order_id = order_id ?? ledgerEntry.order_id;
+
+    // Recalculate total_balance
+    ledgerEntry.total_balance = `${Math.abs(ledgerEntry.credit - ledgerEntry.debit)} ${ledgerEntry.credit >= ledgerEntry.debit ? "CR" : "DB"}`;
+
+    await ledgerEntry.save();
+
+    return successResponse(res, "Ledger entry updated successfully", { updatedEntry: ledgerEntry });
+  } catch (error) {
+    return sendError(res, error.message);
+  }
+};
+
+
 const userLedgerController = {
   addUserLedger,
-  getUserLedgers
+  getUserLedgers,
+  editUserLedger
 };
 
 export default userLedgerController;
