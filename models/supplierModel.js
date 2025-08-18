@@ -24,6 +24,10 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  company_name: {
+    type: String,
+    trim: true
+  },
   phone_number: {
     type: String,
     trim: true

@@ -83,6 +83,7 @@ export const createCustomer = async (req, res) => {
       owner2_phone_number,
       email,
       phone_number,
+      company_name,
       ptcl_number,
       address,
       area_id,
@@ -103,10 +104,6 @@ export const createCustomer = async (req, res) => {
       return sendError(res, "Name are required fields.");
     }
 
-    if (!booker_id) {
-      return sendError(res, "Booker is required.");
-    }
-
     if (email && email.trim()) {
       const existing = await SupplierModel.findOne({ email: email.trim() });
 
@@ -125,11 +122,12 @@ export const createCustomer = async (req, res) => {
       owner2_phone_number: owner2_phone_number || "",
       email: email || "",
       phone_number: phone_number || "",
+      company_name: company_name || "",
       ptcl_number: ptcl_number || "",
       address: address || "",
       area_id,
       city,
-      booker_id,
+      booker_id: booker_id || null,
       licence_number: licence_number || "",
       licence_expiry: licence_expiry || "",
       ntn_number: ntn_number || "",

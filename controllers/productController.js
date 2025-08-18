@@ -1,5 +1,9 @@
 import { successResponse, sendError } from "../utils/response.js";
 import { ProductModel as Product } from "../models/productModel.js";
+import {OrderModel as Order} from "../models/orderModel.js";
+import {OrderItemModel as OrderItem} from "../models/orderItemModel.js";
+import { BatchModel as Batch } from "../models/batchModel.js";
+import {SupplierModel as Supplier} from "../models/supplierModel.js";
 import mongoose from "mongoose";
 
 
@@ -569,16 +573,90 @@ export const updateProduct = async (req, res) => {
   }
 };
 
+
 export const deleteProduct = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
-    if (!product) return sendError(res, "Product not found", 404);
-    return successResponse(res, "Product deleted successfully", null, 200);
+    const productId = req.params.id;
+
+    // 1. Find product
+    const product = await Product.findById(productId).session(session);
+    if (!product) {
+      await session.abortTransaction();
+      return sendError(res, "Product not found", 404);
+    }
+
+    // 2. Find related order items
+    const orderItems = await OrderItem.find({ product_id: productId }).session(session);
+
+    // 3. Group by order_id to adjust orders later
+    const orderAdjustments = {};
+    for (const item of orderItems) {
+      if (!orderAdjustments[item.order_id]) {
+        orderAdjustments[item.order_id] = [];
+      }
+      orderAdjustments[item.order_id].push(item);
+    }
+
+    // 4. Reverse supplier/customer balances
+    for (const [orderId, items] of Object.entries(orderAdjustments)) {
+      const order = await Order.findById(orderId).session(session);
+      if (!order) continue;
+
+      let totalAdjustment = 0;
+      for (const item of items) {
+        totalAdjustment += item.total;
+      }
+
+      if (order.type === "purchase") {
+        // Reduce supplier pay
+        await Supplier.findByIdAndUpdate(
+          order.supplier_id,
+          { $inc: { pay: -totalAdjustment } },
+          { session }
+        );
+      } else if (order.type === "sale") {
+        // Reduce customer (supplier in your naming)
+        await Supplier.findByIdAndUpdate(
+          order.supplier_id,
+          { $inc: { receive: -totalAdjustment } },
+          { session }
+        );
+      }
+    }
+
+    // 5. Delete order items for this product
+    await OrderItem.deleteMany({ product_id: productId }).session(session);
+
+    // 6. Delete orders that now have no items
+    const affectedOrders = Object.keys(orderAdjustments);
+    for (const orderId of affectedOrders) {
+      const remainingItems = await OrderItem.find({ order_id: orderId }).session(session);
+      if (remainingItems.length === 0) {
+        await Order.findByIdAndDelete(orderId).session(session);
+      }
+    }
+
+    // 7. Delete batches of this product
+    await Batch.deleteMany({ product_id: productId }).session(session);
+
+    // 8. Finally delete the product itself
+    await Product.findByIdAndDelete(productId).session(session);
+
+    await session.commitTransaction();
+    return successResponse(res, "Product and related data deleted successfully", null, 200);
+
   } catch (error) {
+    await session.abortTransaction();
     console.error("Delete Product Error:", error);
-    return sendError(res, "Failed to delete product", 500);
+    return sendError(res, "Failed to delete product and related data", 500);
+  } finally {
+    session.endSession();
   }
 };
+
 
 
 const productController = {

@@ -177,7 +177,7 @@ const deleteUser = async (req, res) => {
     if (!user) return sendError(res, "User not found");
 
     // ✅ Also delete the associated UserLedger entries
-    // await UserLedger.deleteMany({ user_id: user._id });
+    await UserLedger.deleteMany({ user_id: user._id });
 
     successResponse(res, "User and related ledger entries deleted");
   } catch (error) {
