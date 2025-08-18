@@ -19,7 +19,7 @@ const orderSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["completed", "skipped"],
-      // default: "completed",
+      default: "completed",
     },
   },
   { timestamps: true }

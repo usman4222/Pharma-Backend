@@ -9,19 +9,23 @@ const getAllUsers = async (req, res) => {
   try {
     const { status } = req.query;
 
-    const query = {};
+    const query = {
+      // exclude admin@gmail.com
+      email: { $ne: "admin@gmail.com" },
+    };
+
     if (status !== undefined) {
       query.status = status;
     }
 
-    // Fetch all users without pagination
+    // Fetch all users except admin
     const users = await User.find(query)
       .sort({ createdAt: -1 })
-      .populate('area_id', 'name city description');
+      .populate("area_id", "name city description");
 
     return successResponse(res, "Users fetched successfully", {
       users,
-      totalItems: users.length 
+      totalItems: users.length,
     });
   } catch (error) {
     return sendError(res, "Failed to fetch users", error);

@@ -26,6 +26,8 @@ const createPurchase = async (req, res) => {
             status,
         } = req.body;
 
+        console.log('Received status:', req.body.status); 
+
         // Validate ALL required fields
         const requiredFields = {
             invoice_number,
