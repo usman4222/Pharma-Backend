@@ -1,69 +1,105 @@
 import { OrderModel as Order } from "../models/orderModel.js";
 import { OrderItemModel as OrderItem } from "../models/orderItemModel.js";
-import { SupplierModel as Supplier } from "../models/supplierModel.js";
+import { SupplierModel as Supplier, SupplierModel } from "../models/supplierModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
 import { ProductModel as Product } from "../models/productModel.js";
 import { User } from "../models/userModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import mongoose from "mongoose";
+import adjustBalance from "../utils/adjustBalance.js";
 
 // Create a new order
 const createPurchase = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
-
+  
     try {
-        const {
-            invoice_number,
-            supplier_id,
-            subtotal,
-            total,
-            paid_amount,
-            due_amount,
-            net_value,
-            items, // Array of order items
-            type = "purchase",
-            status,
-        } = req.body;
-
-        console.log('Received status:', req.body.status); 
-
-        // Validate ALL required fields
-        const requiredFields = {
-            invoice_number,
-            supplier_id,
-            subtotal,
-            total,
-            paid_amount,
-            due_amount,
-            net_value,
-            items
-        };
-
-        const missingFields = Object.entries(requiredFields)
-            .filter(([_, value]) => value === undefined || value === null || value === '')
-            .map(([key]) => key);
-
-        if (missingFields.length > 0) {
-            await session.abortTransaction();
-            return sendError(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
+      const {
+        invoice_number,
+        supplier_id,
+        subtotal,
+        total,
+        paid_amount,
+        due_amount,
+        net_value,
+        items, // Array of order items
+        type = "purchase",
+        status,
+      } = req.body;
+  
+      console.log("Received status:", req.body.status);
+  
+      // Validate ALL required fields
+      const requiredFields = {
+        invoice_number,
+        supplier_id,
+        subtotal,
+        total,
+        paid_amount,
+        due_amount,
+        net_value,
+        items,
+      };
+  
+      const missingFields = Object.entries(requiredFields)
+        .filter(([_, value]) => value === undefined || value === null || value === "")
+        .map(([key]) => key);
+  
+      if (missingFields.length > 0) {
+        await session.abortTransaction();
+        return sendError(
+          res,
+          `Missing required fields: ${missingFields.join(", ")}`,
+          400
+        );
+      }
+  
+      // Validate type is purchase
+      if (type !== "purchase") {
+        await session.abortTransaction();
+        return sendError(res, "Invalid order type", 400);
+      }
+  
+      // helper to normalize balances
+      function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
+        let pay = currentPay + addPay; // debit
+        let receive = currentReceive + addReceive; // credit
+  
+        if (pay > receive) {
+          pay = pay - receive;
+          receive = 0;
+        } else {
+          receive = receive - pay;
+          pay = 0;
         }
-
-        // Validate type is purchase
-        if (type !== "purchase") {
-            await session.abortTransaction();
-            return sendError(res, "Invalid order type", 400);
-        }
-
-        // Check if supplier exists
-        const supplier = await Supplier.findById(supplier_id).session(session);
-        if (!supplier) {
-            await session.abortTransaction();
-            return sendError(res, "Supplier not found", 404);
-        }
-
-        // Create new order
-        const newOrder = await Order.create([{
+        return { pay, receive };
+      }
+  
+      // 🔹 Get supplier
+      const supplierDoc = await SupplierModel.findById(supplier_id).session(session);
+      if (!supplierDoc) {
+        await session.abortTransaction();
+        return sendError(res, "Supplier not found", 404);
+      }
+  
+      // 🔹 Adjust supplier balances
+      const { pay, receive } = adjustPayReceive(
+        supplierDoc.pay || 0,
+        supplierDoc.receive || 0,
+        total, // purchase adds debit (payable)
+        0
+      );
+  
+      await SupplierModel.findByIdAndUpdate(
+        supplier_id,
+        { pay, receive },
+        { session }
+      );
+  
+      // 🔹 Create new order
+      const newOrder = await Order.create(
+        [
+          {
             invoice_number,
             supplier_id,
             subtotal,
@@ -72,90 +108,96 @@ const createPurchase = async (req, res) => {
             due_amount,
             net_value,
             type,
-            status
-        }], { session });
-
-        if (!newOrder?.length) {
-            await session.abortTransaction();
-            return sendError(res, "Failed to create order", 500);
-        }
-
-        // Process order items and batches
-        const orderItems = [];
-        const batchUpdates = [];
-
-        for (const item of items) {
-
-            // Validate product exists
-            const product = await Product.findById(item.product_id).session(session);
-            if (!product) {
-                await session.abortTransaction();
-                return sendError(res, `Product not found: ${item.product_id}`, 404);
-            }
-
-            // Create order item
-            const orderItem = await OrderItem.create([{
-                order_id: newOrder[0]._id,
-                product_id: item.product_id,
-                batch: item.batch,
-                expiry: item.expiry,
-                units: item.units,
-                unit_price: item.unit_price,
-                discount: item.discount || 0,
-                total: item.total
-            }], { session });
-
-            orderItems.push(orderItem[0]);
-
-            // Create or update batch
-            batchUpdates.push({
-                updateOne: {
-                    filter: {
-                        product_id: item.product_id,
-                        batch_number: item.batch
-                    },
-                    update: {
-                        $setOnInsert: {
-                            product_id: item.product_id,
-                            batch_number: item.batch,
-                            purchase_price: item.unit_price,
-                            expiry_date: item.expiry
-                        },
-                        $inc: { stock: item.units }
-                    },
-                    upsert: true
-                }
-            });
-
-        }
-
-        // Execute all batch updates
-        if (batchUpdates.length) {
-            await Batch.bulkWrite(batchUpdates, { session });
-        }
-
-        // Update supplier's payable amount (add to pay field)
-        await Supplier.findByIdAndUpdate(
-            supplier_id,
-            { $inc: { pay: total } }, // Add to supplier's payable amount
-            { session }
-        );
-
-        await session.commitTransaction();
-
-        return successResponse(res, "Purchase order created successfully", {
-            order: newOrder[0],
-            items: orderItems,
-        }, 201);
-
-    } catch (error) {
+            status,
+          },
+        ],
+        { session }
+      );
+  
+      if (!newOrder?.length) {
         await session.abortTransaction();
-        console.error("Purchase error:", error);
-        return sendError(res, error.message);
+        return sendError(res, "Failed to create order", 500);
+      }
+  
+      // 🔹 Process order items and batches
+      const orderItems = [];
+      const batchUpdates = [];
+  
+      for (const item of items) {
+        // Validate product exists
+        const product = await Product.findById(item.product_id).session(session);
+        if (!product) {
+          await session.abortTransaction();
+          return sendError(res, `Product not found: ${item.product_id}`, 404);
+        }
+  
+        // Create order item
+        const orderItem = await OrderItem.create(
+          [
+            {
+              order_id: newOrder[0]._id,
+              product_id: item.product_id,
+              batch: item.batch,
+              expiry: item.expiry,
+              units: item.units,
+              unit_price: item.unit_price,
+              discount: item.discount || 0,
+              total: item.total,
+            },
+          ],
+          { session }
+        );
+  
+        orderItems.push(orderItem[0]);
+  
+        // Create or update batch
+        batchUpdates.push({
+          updateOne: {
+            filter: {
+              product_id: item.product_id,
+              batch_number: item.batch,
+            },
+            update: {
+              $setOnInsert: {
+                product_id: item.product_id,
+                batch_number: item.batch,
+                purchase_price: item.unit_price,
+                expiry_date: item.expiry,
+              },
+              $inc: { stock: item.units },
+            },
+            upsert: true,
+          },
+        });
+      }
+  
+      // Bulk update batches
+      if (batchUpdates.length) {
+        await Batch.bulkWrite(batchUpdates, { session });
+      }
+  
+      // ✅ removed duplicate supplier pay update
+  
+      await session.commitTransaction();
+  
+      return successResponse(
+        res,
+        "Purchase order created successfully",
+        {
+          order: newOrder[0],
+          items: orderItems,
+        },
+        201
+      );
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("Purchase error:", error);
+      return sendError(res, error.message);
     } finally {
-        session.endSession();
+      session.endSession();
     }
-};
+  };
+  
 
 // Get all purchases by supplier ID
 const getPurchasesBySupplier = async (req, res) => {
@@ -357,73 +399,59 @@ const getProductPurchases = async (req, res) => {
 const deletePurchase = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
-
+  
     try {
-        const { orderId } = req.params;
-
-        if (!mongoose.Types.ObjectId.isValid(orderId)) {
-            await session.abortTransaction();
-            return sendError(res, 'Invalid order ID', 400);
-        }
-
-        // Fetch the order
-        const order = await Order.findById(orderId).session(session);
-        if (!order) {
-            await session.abortTransaction();
-            return sendError(res, 'Order not found', 404);
-        }
-
-        if (order.type !== 'purchase') {
-            await session.abortTransaction();
-            return sendError(res, 'Cannot delete: Not a purchase order', 400);
-        }
-
-        // Fetch order items
-        const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
-
-        // Decrease batch stock
-        for (const item of orderItems) {
-            const batchUpdate = await Batch.findOneAndUpdate(
-                {
-                    product_id: item.product_id,
-                    batch_number: item.batch
-                },
-                { $inc: { stock: -item.units } },
-                { session, new: true }
-            );
-
-            // Delete batch if stock reaches zero or below
-            if (batchUpdate.stock <= 0) {
-                await Batch.deleteOne(
-                    { _id: batchUpdate._id },
-                    { session }
-                );
-            }
-        }
-
-        // Update supplier's payable amount
-        await Supplier.findByIdAndUpdate(
-            order.supplier_id,
-            { $inc: { pay: -order.total } },
-            { session }
-        );
-
-        // Delete order items
-        await OrderItem.deleteMany({ order_id: orderId }).session(session);
-
-        // Delete the order
-        await Order.findByIdAndDelete(orderId).session(session);
-
-        await session.commitTransaction();
-        return successResponse(res, 'Purchase deleted successfully');
-    } catch (error) {
+      const { orderId } = req.params;
+  
+      if (!mongoose.Types.ObjectId.isValid(orderId)) {
         await session.abortTransaction();
-        console.error('Delete Purchase Error:', error);
-        return sendError(res, error.message);
+        return sendError(res, "Invalid order ID", 400);
+      }
+  
+      const order = await Order.findById(orderId).session(session);
+      if (!order) {
+        await session.abortTransaction();
+        return sendError(res, "Order not found", 404);
+      }
+  
+      if (order.type !== "purchase") {
+        await session.abortTransaction();
+        return sendError(res, "Cannot delete: Not a purchase order", 400);
+      }
+  
+      // Restore stock (reverse purchase)
+      const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
+      for (const item of orderItems) {
+        const batchUpdate = await Batch.findOneAndUpdate(
+          { product_id: item.product_id, batch_number: item.batch },
+          { $inc: { stock: -item.units } },
+          { session, new: true }
+        );
+  
+        if (batchUpdate && batchUpdate.stock <= 0) {
+          await Batch.deleteOne({ _id: batchUpdate._id }, { session });
+        }
+      }
+  
+      // Restore supplier balance
+      const supplier = await Supplier.findById(order.supplier_id).session(session);
+      const { pay, receive } = adjustBalance(supplier, order.total, order.type, true);
+      await Supplier.findByIdAndUpdate(order.supplier_id, { pay, receive }, { session });
+  
+      // Delete order + items
+      await OrderItem.deleteMany({ order_id: orderId }).session(session);
+      await Order.findByIdAndDelete(orderId).session(session);
+  
+      await session.commitTransaction();
+      return successResponse(res, "Purchase deleted successfully");
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("Delete Purchase Error:", error);
+      return sendError(res, error.message);
     } finally {
-        session.endSession();
+      session.endSession();
     }
-};
+  };
 
 const purchaseController = {
     createPurchase,

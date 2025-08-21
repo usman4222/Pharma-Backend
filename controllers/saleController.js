@@ -6,6 +6,7 @@ import { ProductModel as Product } from "../models/productModel.js";
 import { User } from "../models/userModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import mongoose from "mongoose";
+import adjustBalance from "../utils/adjustBalance.js";
 
 const createSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -14,7 +15,7 @@ const createSale = async (req, res) => {
   try {
     const {
       invoice_number,
-      supplier_id,
+      supplier_id,   // customer
       booker_id,
       subtotal,
       total,
@@ -27,7 +28,7 @@ const createSale = async (req, res) => {
       status,
     } = req.body;
 
-    // 1. Validate required fields including batch numbers
+    // 1. Validate required fields
     const requiredFields = {
       invoice_number,
       supplier_id,
@@ -41,17 +42,17 @@ const createSale = async (req, res) => {
     };
 
     const missingFields = Object.entries(requiredFields)
-      .filter(([_, value]) => value === undefined || value === null || value === '')
+      .filter(([_, value]) => value === undefined || value === null || value === "")
       .map(([key]) => key);
 
     if (missingFields.length > 0) {
       await session.abortTransaction();
-      return sendError(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
+      return sendError(res, `Missing required fields: ${missingFields.join(", ")}`, 400);
     }
 
-    // 2. Validate each item has a batch number
+    // 2. Validate batch numbers
     for (const item of items) {
-      if (!item.batch || item.batch.trim() === '') {
+      if (!item.batch || item.batch.trim() === "") {
         await session.abortTransaction();
         return sendError(res, `Batch number is required for all items`, 400);
       }
@@ -62,14 +63,14 @@ const createSale = async (req, res) => {
       return sendError(res, "Invalid order type", 400);
     }
 
-    // 3. Validate supplier exists
-    const supplier = await Supplier.findById(supplier_id).session(session);
-    if (!supplier) {
+    // 3. Validate supplier (customer) exists
+    const supplierDoc = await Supplier.findById(supplier_id).session(session);
+    if (!supplierDoc) {
       await session.abortTransaction();
       return sendError(res, "Supplier (Customer) not found", 404);
     }
 
-    // 4. Validate booker exists if booker_id is provided
+    // 4. Validate booker
     if (booker_id) {
       const booker = await User.findById(booker_id).session(session);
       if (!booker) {
@@ -78,16 +79,20 @@ const createSale = async (req, res) => {
       }
     }
 
-    // 5. Validate product stock availability for each batch
+    // 5. Validate product stock
     for (const item of items) {
       const batch = await Batch.findOne({
         product_id: item.product_id,
-        batch_number: item.batch
+        batch_number: item.batch,
       }).session(session);
 
       if (!batch) {
         await session.abortTransaction();
-        return sendError(res, `Batch ${item.batch} not found for product ${item.product_id}`, 404);
+        return sendError(
+          res,
+          `Batch ${item.batch} not found for product ${item.product_id}`,
+          404
+        );
       }
 
       if (item.units > batch.stock) {
@@ -100,7 +105,7 @@ const createSale = async (req, res) => {
       }
     }
 
-    // 6. Create the order
+    // 6. Create order
     const newOrder = await Order.create(
       [
         {
@@ -125,7 +130,7 @@ const createSale = async (req, res) => {
       return sendError(res, "Failed to create order", 500);
     }
 
-    // 7. Create order items and update batches
+    // 7. Order items + batch updates
     const orderItems = [];
     const batchUpdates = [];
 
@@ -160,22 +165,41 @@ const createSale = async (req, res) => {
             product_id: item.product_id,
             batch_number: item.batch,
           },
-          update: {
-            $inc: { stock: -item.units },
-          },
+          update: { $inc: { stock: -item.units } },
         },
       });
     }
 
-    // 8. Execute batch updates
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
-    // 9. Update supplier balance
+    // 8. Adjust balances (sale increases receive)
+    function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
+      let pay = currentPay + addPay;
+      let receive = currentReceive + addReceive;
+
+      if (pay > receive) {
+        pay = pay - receive;
+        receive = 0;
+      } else {
+        receive = receive - pay;
+        pay = 0;
+      }
+
+      return { pay, receive };
+    }
+
+    const { pay, receive } = adjustPayReceive(
+      supplierDoc.pay || 0,
+      supplierDoc.receive || 0,
+      0,     // no new pay
+      total  // sale increases receive
+    );
+
     await Supplier.findByIdAndUpdate(
       supplier_id,
-      { $inc: { receive: total } },
+      { pay, receive },
       { session }
     );
 
@@ -184,10 +208,7 @@ const createSale = async (req, res) => {
     return successResponse(
       res,
       "Sale order created successfully",
-      {
-        order: newOrder[0],
-        items: orderItems,
-      },
+      { order: newOrder[0], items: orderItems },
       201
     );
   } catch (error) {
@@ -407,56 +428,47 @@ const deleteSale = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    console.log("orderId", orderId)
-
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       await session.abortTransaction();
-      return sendError(res, 'Invalid order ID', 400);
+      return sendError(res, "Invalid order ID", 400);
     }
 
-    // Fetch the order
     const order = await Order.findById(orderId).session(session);
     if (!order) {
       await session.abortTransaction();
-      return sendError(res, 'Order not found', 404);
+      return sendError(res, "Order not found", 404);
     }
 
-    if (order.type !== 'sale') {
+    if (order.type !== "sale") {
       await session.abortTransaction();
-      return sendError(res, 'Cannot delete: Not a sale order', 400);
+      return sendError(res, "Cannot delete: Not a sale order", 400);
     }
 
-    // Fetch order items
+    // Restore stock (reverse sale)
     const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
-
-    // Revert stock to batches
     for (const item of orderItems) {
       await Batch.updateOne(
         { product_id: item.product_id, batch_number: item.batch },
-        { $inc: { stock: item.units } }, // restore sold units
+        { $inc: { stock: item.units } },
         { session }
       );
     }
 
-    // Update customer balance (assuming 'receive' represents how much customer owes you)
-    await Supplier.findByIdAndUpdate(
-      order.supplier_id,
-      { $inc: { receive: -order.total } },
-      { session }
-    );
+    // Restore customer balance
+    const supplier = await Supplier.findById(order.supplier_id).session(session);
+    const { pay, receive } = adjustBalance(supplier, order.total, order.type, true);
+    await Supplier.findByIdAndUpdate(order.supplier_id, { pay, receive }, { session });
 
-    // Delete order items
+    // Delete order + items
     await OrderItem.deleteMany({ order_id: orderId }).session(session);
-
-    // Delete the order
     await Order.findByIdAndDelete(orderId).session(session);
 
     await session.commitTransaction();
-    return successResponse(res, 'Sale deleted successfully');
+    return successResponse(res, "Sale deleted successfully");
   } catch (error) {
     await session.abortTransaction();
-    console.error('Delete Sale Error:', error);
-    return sendError(res, error.message || 'Failed to delete sale');
+    console.error("Delete Sale Error:", error);
+    return sendError(res, error.message || "Failed to delete sale");
   } finally {
     session.endSession();
   }

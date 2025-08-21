@@ -7,9 +7,11 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    father_name: { type: String, 
+    father_name: {
+      type: String,
       // required: true, 
-      trim: true },
+      trim: true
+    },
     email: {
       type: String,
       // required: true,
@@ -30,10 +32,12 @@ const userSchema = new mongoose.Schema(
       type: Number,
     },
     city: { type: String },
-    area_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Area'
-    },
+    area_id: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Area'
+      }
+    ],
     role: {
       type: String,
       enum: ["admin", "employee"],
@@ -47,7 +51,7 @@ const userSchema = new mongoose.Schema(
     incentive_percentage: { type: Number },
     employee_type: {
       type: String,
-      enum: ["booker", "supply_man", "order_taker", "tea_man", "it", "branch_manager", "founder"],
+      enum: ["booker", "supply_man", "order_taker", "tea_man", "it", "branch_manager", "founder", "ceo", "co_founder"],
       default: "supply_man",
     },
     join_date: {

@@ -113,8 +113,10 @@ export const createCustomer = async (req, res) => {
       }
     }
 
+     //Opening balance will directly become the receive amount
+     const finalReceive = opening_balance || 0;
 
-    // 📦 Prepare supplier data
+    //Prepare supplier data
     const customerData = {
       owner1_name,
       owner2_name: owner2_name || "",
@@ -133,6 +135,7 @@ export const createCustomer = async (req, res) => {
       ntn_number: ntn_number || "",
       role: role || "supplier",
       opening_balance: opening_balance || 0,
+      receive: finalReceive, 
       credit_period: credit_period || 0,
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
