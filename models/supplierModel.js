@@ -81,10 +81,15 @@ const supplierSchema = new mongoose.Schema({
     enum: ['customer', 'supplier', 'both'],
     default: 'supplier',
     trim: true
-  },  
+  },
   opening_balance: {
     type: Number,
     default: 0
+  },
+  balanceType: {
+    type: String,
+    enum: ['pay', 'receive'],
+    default: 'pay',
   },
   credit_period: {
     type: Number,
@@ -102,6 +107,7 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     trim: true
   }
+  
 }, {
   timestamps: true
 });

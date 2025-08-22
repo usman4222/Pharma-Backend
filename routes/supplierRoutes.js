@@ -17,6 +17,7 @@ router.post(
 );
 router.put("/:id", supplierController.updateSupplier);
 router.delete("/:id", supplierController.deleteSupplier);
+router.patch("/toggle-status", supplierController.toggleSupplierStatus);
 router.patch("/status", supplierController.toggleSupplierStatus);
 
 export default router;

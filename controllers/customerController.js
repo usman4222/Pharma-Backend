@@ -93,6 +93,7 @@ export const createCustomer = async (req, res) => {
       licence_expiry,
       ntn_number,
       role,
+      balanceType,
       opening_balance,
       credit_period,
       credit_limit,
@@ -113,8 +114,9 @@ export const createCustomer = async (req, res) => {
       }
     }
 
-     //Opening balance will directly become the receive amount
-     const finalReceive = opening_balance || 0;
+    //Opening balance will directly become the receive amount
+    const finalReceive = balanceType === 'receive' ? opening_balance : 0;
+    const finalPay = balanceType === 'pay' ? opening_balance : 0;
 
     //Prepare supplier data
     const customerData = {
@@ -135,7 +137,8 @@ export const createCustomer = async (req, res) => {
       ntn_number: ntn_number || "",
       role: role || "supplier",
       opening_balance: opening_balance || 0,
-      receive: finalReceive, 
+      receive: finalReceive,
+      pay: finalPay,
       credit_period: credit_period || 0,
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
@@ -150,6 +153,8 @@ export const createCustomer = async (req, res) => {
     return sendError(res, "Failed to create customer", 500);
   }
 };
+
+
 
 // Update customer
 export const updateCustomer = async (req, res) => {
