@@ -51,7 +51,7 @@ const userSchema = new mongoose.Schema(
     incentive_percentage: { type: Number },
     employee_type: {
       type: String,
-      enum: ["booker", "supply_man", "order_taker", "tea_man", "it", "branch_manager", "founder", "ceo", "co_founder"],
+      enum: ["booker", "supply_man", "order_taker", "tea_man", "it", "branch_manager", "founder", "ceo", "co_founder", "store_supervisor", "investor"],
       default: "supply_man",
     },
     join_date: {
@@ -77,7 +77,7 @@ const userSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "inactive", "blocked"],
+      enum: ["active", "inactive"],
       default: "active",
     },
     tokenVersion: {

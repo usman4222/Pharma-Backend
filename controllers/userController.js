@@ -3,6 +3,7 @@ import { UserLedger } from "../models/userLedgerModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 // GET all users (filtered by status)
 const getAllUsers = async (req, res) => {
@@ -38,6 +39,7 @@ const getAllUsers = async (req, res) => {
 const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id).populate('area_id name');
+    console.log("user", user)
     if (!user) return sendError(res, "User not found");
     successResponse(res, "User fetched", { user });
   } catch (error) {
@@ -64,7 +66,12 @@ export const createUser = async (req, res) => {
       incentive_percentage,
       join_date,
       cnic,
-      status
+      status,
+      profile_photo,
+      cnic_front,
+      cnic_back,
+      cheque_photo,
+      e_stamp
     } = req.body;
 
     // Required field validation
@@ -76,23 +83,12 @@ export const createUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Prepare file paths
-    const files = req.files || {};
     const filePaths = {
-      profile_photo: files.profile_photo?.[0]?.filename
-        ? `/uploads/users/${files.profile_photo[0].filename}`
-        : "",
-      cnic_front: files.cnic_front?.[0]?.filename
-        ? `/uploads/users/${files.cnic_front[0].filename}`
-        : "",
-      cnic_back: files.cnic_back?.[0]?.filename
-        ? `/uploads/users/${files.cnic_back[0].filename}`
-        : "",
-      cheque_photo: files.cheque_photo?.[0]?.filename
-        ? `/uploads/users/${files.cheque_photo[0].filename}`
-        : "",
-      e_stamp: files.e_stamp?.[0]?.filename
-        ? `/uploads/users/${files.e_stamp[0].filename}`
-        : ""
+      profile_photo: profile_photo || "",
+      cnic_front: cnic_front || "",
+      cnic_back: cnic_back || "",
+      cheque_photo: cheque_photo || "",
+      e_stamp: e_stamp || ""
     };
 
     // Create user data
@@ -113,7 +109,7 @@ export const createUser = async (req, res) => {
       join_date: join_date || null,
       cnic: cnic || "",
       status: status || "active",
-      ...filePaths // Spread all file paths
+      ...filePaths
     };
 
     // Create user
@@ -149,11 +145,33 @@ export const getAllBookers = async (req, res) => {
 // UPDATE user
 const updateUser = async (req, res) => {
   try {
-    const userData = req.body;
+    const userData = { ...req.body };
+
+    // Ensure area_id is an array of ObjectIds
+    if (userData.area_id && typeof userData.area_id === "string") {
+      userData.area_id = userData.area_id
+        .split(",")
+        .map((id) => new mongoose.Types.ObjectId(id.trim()));
+    }
+
     const user = await User.findById(req.params.id);
     if (!user) return sendError(res, "User not found");
 
-    Object.assign(user, userData);
+    // Handle image fields - only update if they have non-empty values
+    const imageFields = ['profile_photo', 'cnic_front', 'cnic_back', 'cheque_photo', 'e_stamp'];
+    
+    imageFields.forEach(field => {
+      if (userData[field] !== undefined && userData[field] !== null && userData[field] !== "") {
+        user[field] = userData[field];
+      }
+    });
+
+    // Update other fields excluding image fields
+    const nonImageFields = Object.keys(userData).filter(field => !imageFields.includes(field));
+    nonImageFields.forEach(field => {
+      user[field] = userData[field];
+    });
+
     await user.save();
 
     if (userData.salary) {
@@ -166,10 +184,10 @@ const updateUser = async (req, res) => {
 
     successResponse(res, "User updated", user);
   } catch (error) {
+    console.error("Update User Error:", error);
     sendError(res, "Update User Error", error);
   }
 };
-
 // DELETE user
 const deleteUser = async (req, res) => {
   try {

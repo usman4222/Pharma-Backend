@@ -123,12 +123,40 @@ export const deleteArea = async (req, res) => {
 };
 
 
+// Toggle Area Status (Active/Inactive)
+export const toggleAreaStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // expected "active" or "inactive"
+
+    if (!["active", "inactive"].includes(status)) {
+      return sendError(res, "Invalid status. Must be 'active' or 'inactive'.", 400);
+    }
+
+    const area = await Area.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true }
+    );
+
+    if (!area) return sendError(res, "Area not found", 404);
+
+    return successResponse(res, `Area status updated to ${status}`, { area }, 200);
+  } catch (error) {
+    console.error("Toggle Area Status Error:", error);
+    return sendError(res, "Failed to update area status", 500);
+  }
+};
+
+
+
 const areaController = {
   createArea,
   updateArea,
   deleteArea,
   getAllAreas,
-  getAreaById
+  getAreaById,
+  toggleAreaStatus
 };
 
 export default areaController;

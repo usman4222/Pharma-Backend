@@ -1,3 +1,4 @@
+import permissionModel from "../models/permissionModel.js";
 import { User } from "../models/userModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import bcrypt from "bcryptjs";
@@ -27,9 +28,9 @@ export const loginUser = async (req, res) => {
     }
 
     // ✅ Check if user is admin
-    if (user.role !== "admin") {
-      return sendError(res, "Only admin users can log in", 403);
-    }
+    // if (user.role !== "admin") {
+    //   return sendError(res, "Only admin users can log in", 403);
+    // }
 
     // ✅ Create JWT token
     const token = jwt.sign(
@@ -39,6 +40,10 @@ export const loginUser = async (req, res) => {
     );
 
     // ✅ Success response
+    // Inside your login controller, after user authentication
+    const permissions = await permissionModel.findOne({ userId: user._id });
+    const userPermissions = permissions ? permissions.permissions : [];
+
     return successResponse(res, "Login successful", {
       token,
       user: {
@@ -47,6 +52,7 @@ export const loginUser = async (req, res) => {
         email: user.email,
         role: user.role,
         type: user.type,
+        permissions: userPermissions, // ✅ Include permissions
       },
     });
   } catch (error) {
@@ -76,7 +82,7 @@ export const updatePassword = async (req, res) => {
     }
 
     // Fetch user by ID from the decoded JWT token
-    const user = await User.findById(req.user.id); 
+    const user = await User.findById(req.user.id);
     if (!user) {
       return sendError(res, "User not found");
     }

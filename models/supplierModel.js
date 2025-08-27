@@ -3,7 +3,6 @@ import mongoose from 'mongoose';
 const supplierSchema = new mongoose.Schema({
   owner1_name: {
     type: String,
-    required: true,
     trim: true
   },
   owner2_name: {
@@ -17,7 +16,6 @@ const supplierSchema = new mongoose.Schema({
   },
   owner1_phone_number: {
     type: String,
-    // required: true,
     trim: true
   },
   owner2_phone_number: {
@@ -26,6 +24,7 @@ const supplierSchema = new mongoose.Schema({
   },
   company_name: {
     type: String,
+    required: true,
     trim: true
   },
   phone_number: {
@@ -40,10 +39,12 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  area_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Area'
-  },
+  area_id: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Area'
+    }
+  ],
   city: {
     type: String,
     trim: true
@@ -107,7 +108,7 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     trim: true
   }
-  
+
 }, {
   timestamps: true
 });

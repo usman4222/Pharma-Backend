@@ -1,13 +1,12 @@
+import mongoose from "mongoose";
 import Companies from "../models/companyModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 
 // Create Company
 export const createCompany = async (req, res) => {
   try {
-    console.log("REQ.FILE:", req.file);
-    console.log("REQ.BODY:", req.body);
 
-    const { name, ptcl_number, phone_number, address, email, city } = req.body;
+    const { name, ptcl_number, phone_number, address, email, city, company_logo } = req.body;
 
     if (!name) {
       return sendError(res, "Company name is required", 400);
@@ -20,7 +19,7 @@ export const createCompany = async (req, res) => {
       address: address || "",
       email: email || "",
       city: city || "",
-      company_logo: req.file ? `/uploads/company/${req.file.filename}` : "",
+      company_logo: company_logo || "",
     });
 
     return successResponse(res, "Company created successfully", { company }, 201);
@@ -75,32 +74,55 @@ export const getCompanyById = async (req, res) => {
 // Update Company
 export const updateCompany = async (req, res) => {
   try {
-    const { id } = req.params;
-    const updateData = {};
+    console.log("Update request received:", req.params, req.body);
 
-    if (req.body.name) updateData.name = req.body.name;
-    if (req.body.ptcl_number !== undefined) updateData.ptcl_number = req.body.ptcl_number;
-    if (req.body.phone_number !== undefined) updateData.phone_number = req.body.phone_number;
-    if (req.body.address !== undefined) updateData.address = req.body.address;
-    if (req.body.image !== undefined) updateData.image = req.body.image;
-    if (req.body.email !== undefined) updateData.email = req.body.email;
-    if (req.body.city_id !== undefined) updateData.city_id = req.body.city_id;
+    const { id } = req.params;
+
+    // Validate ID
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      console.log("Invalid ID:", id);
+      return sendError(res, "Invalid company ID", 400);
+    }
+
+    const updateData = {};
+    const allowedFields = ['name', 'ptcl_number', 'phone_number', 'address', 'company_logo', 'email', 'city'];
+
+    // Build update data
+    allowedFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
+      }
+    });
+
+    console.log("Update data:", updateData);
 
     if (Object.keys(updateData).length === 0) {
       return sendError(res, "At least one field must be provided for update", 400);
     }
 
-    const company = await Companies.findByIdAndUpdate(id, updateData, { new: true });
+    const company = await Companies.findByIdAndUpdate(
+      id,
+      updateData,
+      {
+        new: true,
+        runValidators: true // Ensure validators run
+      }
+    );
 
-    if (!company) return sendError(res, "Company not found", 404);
+    console.log("Update result:", company);
+
+    if (!company) {
+      console.log("Company not found with ID:", id);
+      return sendError(res, "Company not found", 404);
+    }
 
     return successResponse(res, "Company updated successfully", { company }, 200);
   } catch (error) {
     console.error("Update Company Error:", error);
-    return sendError(res, "Failed to update company", 500);
+    console.error("Error details:", error.message, error.stack);
+    return sendError(res, "Failed to update company: " + error.message, 500);
   }
 };
-
 // Delete Company
 export const deleteCompany = async (req, res) => {
   try {

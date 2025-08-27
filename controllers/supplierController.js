@@ -58,22 +58,13 @@ export const createSupplier = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
+      licence_photo
     } = req.body || {};
 
-    if (!owner1_name) {
-      return sendError(res, "Name are required fields.");
+    if (!company_name) {
+      return sendError(res, "Company Name is required.");
     }
 
-    // 🔍 Check for existing supplier
-    const existing = await SupplierModel.findOne({
-      $or: [
-        { email: email },
-      ],
-    });
-
-    if (existing) {
-      return sendError(res, "Supplier with same email already exists", 400);
-    }
 
     // 📦 Prepare supplier data
     const supplierData = {
@@ -98,7 +89,7 @@ export const createSupplier = async (req, res) => {
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
       status: "active",
-      licence_photo: req.file ? `/uploads/suppliers/${req.file.filename}` : "",
+      licence_photo: licence_photo || "",
     };
 
     const supplier = new SupplierModel(supplierData);

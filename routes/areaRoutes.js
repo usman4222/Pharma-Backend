@@ -9,5 +9,7 @@ router.get("/", areaController.getAllAreas);
 router.get("/:id", areaController.getAreaById);
 router.put("/:id", areaController.updateArea);
 router.delete("/:id", areaController.deleteArea);
+router.patch("/:id/status", areaController.toggleAreaStatus);
+
 
 export default router;

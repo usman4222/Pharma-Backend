@@ -11,7 +11,12 @@ const areaSchema = new mongoose.Schema({
   city: {
     type: String,
     required: true
-  }
+  },
+  status: {
+    type: String,
+    enum: ["active", "inactive"],
+    default: "active",
+  },
 }, {
   timestamps: true
 });

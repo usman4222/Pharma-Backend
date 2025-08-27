@@ -249,7 +249,7 @@ const getAllPurchases = async (req, res) => {
 
         // Get all purchase orders with pagination
         const purchases = await Order.find({ type: "purchase" })
-            .populate('supplier_id', 'owner1_name')
+            .populate('supplier_id', 'company_name role')
             // .populate('booker_id', 'name')
             .sort({ createdAt: -1 })
             .skip(skip)

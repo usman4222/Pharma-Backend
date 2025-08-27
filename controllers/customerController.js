@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { SupplierModel } from "../models/supplierModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 
@@ -99,19 +100,11 @@ export const createCustomer = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
+      licence_photo
     } = req.body || {};
 
-    if (!owner1_name) {
-      return sendError(res, "Name are required fields.");
-    }
-
-    if (email && email.trim()) {
-      const existing = await SupplierModel.findOne({ email: email.trim() });
-
-      // also guard against matching empty strings in DB
-      if (existing && existing.email.trim() !== "") {
-        return sendError(res, "Customer with same email already exists", 400);
-      }
+    if (!company_name) {
+      return sendError(res, "Company Name required field.");
     }
 
     //Opening balance will directly become the receive amount
@@ -143,7 +136,7 @@ export const createCustomer = async (req, res) => {
       credit_limit: credit_limit || 0,
       cnic: cnic || "",
       status: status || "active",
-      licence_photo: req.file ? `/uploads/customers/${req.file.filename}` : "",
+      licence_photo: licence_photo || "",
     };
 
     const customer = await SupplierModel.create(customerData);
@@ -162,17 +155,23 @@ export const updateCustomer = async (req, res) => {
     const customer = await SupplierModel.findById(req.params.id);
     if (!customer) return sendError(res, "Customer not found", 404);
 
-    const updateData = {
-      ...req.body,
-    };
+    const updateData = { ...req.body };
+
+    // Ensure area_id is stored as array of ObjectIds
+    if (updateData.area_id) {
+      updateData.area_id = Array.isArray(updateData.area_id)
+        ? updateData.area_id.map(id => mongoose.Types.ObjectId(id))
+        : [mongoose.Types.ObjectId(updateData.area_id)];
+    }
 
     if (req.file) {
       updateData.licence_photo = req.file.filename;
     }
 
-    await customer.updateOne(updateData);
+    // Update using set + save for proper validation
+    Object.assign(customer, updateData);
+    await customer.save();
 
-    // ✅ Refetch updated customer
     const updatedCustomer = await SupplierModel.findById(req.params.id);
 
     return successResponse(res, "Customer updated successfully", { customer: updatedCustomer });
