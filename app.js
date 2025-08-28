@@ -20,6 +20,7 @@ import freeSaleDescRoute from "./routes/freeSaleDescRoutes.js";
 import freeSaleRoute from "./routes/freeSaleRoutes.js";
 import estimatedSaleRoute from "./routes/estimatedSaleRoutes.js";
 import permissionRoute from "./routes/permissionRoutes.js";
+import investorRoute from "./routes/investorRoute.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 
 import cors from 'cors';
@@ -77,6 +78,7 @@ app.use("/api/free-sale-desc", apiLimiter, freeSaleDescRoute);
 app.use("/api/free-sale", apiLimiter, freeSaleRoute);
 app.use("/api/estimated-sale", apiLimiter, estimatedSaleRoute);
 app.use("/api/permissions", apiLimiter, permissionRoute);
+app.use("/api/investor", apiLimiter, investorRoute);
 
 app.use("/uploads", express.static("uploads")); // Serve uploaded images
 app.use("/api/upload", uploadRoutes);

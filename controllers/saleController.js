@@ -193,8 +193,8 @@ const createSale = async (req, res) => {
     const { pay, receive } = adjustPayReceive(
       supplierDoc.pay || 0,
       supplierDoc.receive || 0,
-      0,     // no new pay
-      total  // sale increases receive
+      total, // 🔹 sale adds in debit now
+      0      // no credit
     );
 
     await Supplier.findByIdAndUpdate(
@@ -274,7 +274,7 @@ const getAllSales = async (req, res) => {
 
     // Get all sale orders with pagination
     const sales = await Order.find({ type: "sale" })
-    .populate('supplier_id', 'company_name role')
+      .populate('supplier_id', 'company_name role')
       .populate('booker_id', 'name')
       .sort({ createdAt: -1 })
       .skip(skip)

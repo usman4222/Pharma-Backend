@@ -152,31 +152,30 @@ export const createCustomer = async (req, res) => {
 // Update customer
 export const updateCustomer = async (req, res) => {
   try {
-    const customer = await SupplierModel.findById(req.params.id);
-    if (!customer) return sendError(res, "Customer not found", 404);
-
     const updateData = { ...req.body };
 
     // Ensure area_id is stored as array of ObjectIds
     if (updateData.area_id) {
       updateData.area_id = Array.isArray(updateData.area_id)
-        ? updateData.area_id.map(id => mongoose.Types.ObjectId(id))
-        : [mongoose.Types.ObjectId(updateData.area_id)];
+        ? updateData.area_id.map(id => new mongoose.Types.ObjectId(id))
+        : [new mongoose.Types.ObjectId(updateData.area_id)];
     }
 
     if (req.file) {
       updateData.licence_photo = req.file.filename;
     }
 
-    // Update using set + save for proper validation
-    Object.assign(customer, updateData);
-    await customer.save();
+    const updatedCustomer = await SupplierModel.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true } // Return updated document and run validators
+    );
 
-    const updatedCustomer = await SupplierModel.findById(req.params.id);
+    if (!updatedCustomer) return sendError(res, "Customer not found", 404);
 
     return successResponse(res, "Customer updated successfully", { customer: updatedCustomer });
   } catch (error) {
-    console.error("Update Customer Error:", error);
+    console.error("Update Customer Error:", error.message);
     return sendError(res, "Failed to update customer", 500);
   }
 };
