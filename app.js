@@ -6,17 +6,17 @@ import rateLimit from "express-rate-limit";
 import userRoute from "./routes/userRoutes.js";
 import authRoute from "./routes/authRoutes.js";
 import productRoute from "./routes/productRoutes.js";
-import supplierRoute from "./routes/supplierRoutes.js"; 
-import customerRoute from "./routes/customerRoutes.js"; 
+import supplierRoute from "./routes/supplierRoutes.js";
+import customerRoute from "./routes/customerRoutes.js";
 import areaRoute from "./routes/areaRoutes.js";
 import genericRoute from "./routes/genericRoutes.js";
-import companyRoute from "./routes/companyRoutes.js"; 
-import productTypeRoute from "./routes/productTypeRoutes.js"; 
-import purchaseRoute from "./routes/purchaseRoutes.js";  
+import companyRoute from "./routes/companyRoutes.js";
+import productTypeRoute from "./routes/productTypeRoutes.js";
+import purchaseRoute from "./routes/purchaseRoutes.js";
 import saleRoute from "./routes/saleRoutes.js";
 import packSizeRoute from "./routes/packSizeRoutes.js";
-import userLedgerRoute from "./routes/userLedgerRoute.js"; 
-import freeSaleDescRoute from "./routes/freeSaleDescRoutes.js"; 
+import userLedgerRoute from "./routes/userLedgerRoute.js";
+import freeSaleDescRoute from "./routes/freeSaleDescRoutes.js";
 import freeSaleRoute from "./routes/freeSaleRoutes.js";
 import estimatedSaleRoute from "./routes/estimatedSaleRoutes.js";
 import permissionRoute from "./routes/permissionRoutes.js";
@@ -37,8 +37,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // ✅ Declare limiter first, then use it
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 60 * 60 * 1000,
+  max: 500,
   message: "Too many requests, try again later",
 });
 

@@ -9,5 +9,8 @@ router.get("/", saleController.getAllSales);
 router.get("/:customerId", saleController.getSalesByCustomer);
 router.get("/product-sales/:productId", saleController.getProductSales);
 router.delete("/:orderId", saleController.deleteSale);
+router.get("/return/search", saleController.getSaleForReturn);
+router.post("/return", saleController.returnSaleByInvoice);
+
 
 export default router;

@@ -13,12 +13,12 @@ const orderSchema = new mongoose.Schema(
     net_value: { type: Number, required: true },
     type: {
       type: String,
-      enum: ["purchase", "sale", "estimated"],
+      enum: ["purchase", "sale", "estimated", "purchase_return", "sale_return"],
       required: true,
     },
     status: {
       type: String,
-      enum: ["completed", "skipped"],
+      enum: ["completed", "skipped", "returned"],
       default: "completed",
     },
   },

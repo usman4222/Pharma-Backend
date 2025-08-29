@@ -1,5 +1,5 @@
 import { OrderModel as Order } from "../models/orderModel.js";
-import { OrderItemModel as OrderItem } from "../models/orderItemModel.js";
+import { OrderItemModel as OrderItem, OrderItemModel } from "../models/orderItemModel.js";
 import { SupplierModel as Supplier } from "../models/supplierModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
 import { ProductModel as Product } from "../models/productModel.js";
@@ -420,6 +420,191 @@ const getProductSales = async (req, res) => {
   }
 };
 
+// Controller: get sale for return
+const getSaleForReturn = async (req, res) => {
+  try {
+    const { invoice_number, customer_id } = req.query;
+
+    // 🔹 Validate: must have at least one
+    if (!invoice_number && !customer_id) {
+      return sendError(res, "Provide either invoice number or customer", 400);
+    }
+
+    const filter = { type: "sale" };
+    if (invoice_number) filter.invoice_number = invoice_number;
+    if (customer_id) filter.supplier_id = customer_id; // assuming supplier_id stores customer
+
+    let sales;
+
+    if (invoice_number) {
+      sales = await Order.findOne(filter)
+        .populate("supplier_id") // attach customer info
+        .populate("booker_id")   // attach booker info if needed
+        .lean();
+
+      if (!sales) {
+        return sendError(res, "Sale order not found", 404);
+      }
+
+      // attach items with product info
+      sales.items = await OrderItemModel.find({ order_id: sales._id })
+        .populate("product_id")
+        .lean();
+
+    } else {
+      sales = await Order.find(filter)
+        .populate("supplier_id")
+        .populate("booker_id")
+        .lean();
+
+      if (!sales || sales.length === 0) {
+        return sendError(res, "No sales found for this customer", 404);
+      }
+
+      for (let order of sales) {
+        order.items = await OrderItemModel.find({ order_id: order._id })
+          .populate("product_id")
+          .lean();
+      }
+    }
+
+    return successResponse(res, "Sale order retrieved", { sales });
+  } catch (error) {
+    console.error("Get sale error:", error);
+    return sendError(res, "Failed to fetch sale order");
+  }
+};
+
+
+const returnSaleByInvoice = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { invoice_number, items } = req.body;
+
+    if (!invoice_number || !items?.length) {
+      await session.abortTransaction();
+      return sendError(res, "Invoice number and items are required", 400);
+    }
+
+    // Fetch original sale order
+    const saleOrder = await Order.findOne({ invoice_number, type: "sale" }).session(session);
+    if (!saleOrder) {
+      await session.abortTransaction();
+      return sendError(res, "Sale order not found", 404);
+    }
+
+    // Fetch customer
+    const customer = await Supplier.findById(saleOrder.supplier_id).session(session);
+    if (!customer) {
+      await session.abortTransaction();
+      return sendError(res, "Customer not found", 404);
+    }
+
+    let totalReturn = 0;
+    const orderItemsMap = {};
+
+    // Validate items and calculate total return
+    for (const item of items) {
+      const orderItem = await OrderItem.findOne({
+        order_id: saleOrder._id,
+        product_id: item.product_id,
+        batch: item.batch,
+      }).session(session);
+
+      if (!orderItem) {
+        await session.abortTransaction();
+        return sendError(res, `Order item not found for batch: ${item.batch}`, 404);
+      }
+
+      if (orderItem.units < item.units) {
+        await session.abortTransaction();
+        return sendError(res, `Return quantity exceeds sold units for batch: ${item.batch}`, 400);
+      }
+
+      // Calculate total for returned units proportionally
+      const unitTotal = orderItem.total / orderItem.units;
+      const returnTotal = unitTotal * item.units;
+      totalReturn += returnTotal;
+
+      orderItemsMap[item.batch] = { orderItem, returnTotal };
+    }
+
+    // Deduct from customer's pay
+    await Supplier.findByIdAndUpdate(
+      customer._id,
+      { pay: Math.max((customer.pay || 0) - totalReturn, 0) },
+      { session }
+    );
+
+    // Create return sale order
+    const returnOrder = await Order.create([{
+      invoice_number: invoice_number + "-R",
+      supplier_id: customer._id,
+      booker_id: saleOrder.booker_id || null,
+      subtotal: totalReturn,
+      total: totalReturn,
+      paid_amount: 0,
+      due_amount: totalReturn,
+      net_value: totalReturn,
+      type: "sale_return",
+      status: "returned",
+    }], { session });
+
+    const returnItems = [];
+    const batchUpdates = [];
+
+    // Process each return item
+    for (const item of items) {
+      const { orderItem, returnTotal } = orderItemsMap[item.batch];
+
+      // Deduct units from original order item
+      orderItem.units -= item.units;
+      await orderItem.save({ session });
+
+      // Create return order item
+      const returnOrderItem = await OrderItem.create([{
+        order_id: returnOrder[0]._id,
+        product_id: item.product_id,
+        batch: item.batch,
+        expiry: item.expiry,
+        units: item.units,
+        unit_price: item.unit_price,
+        discount: item.discount || 0,
+        total: returnTotal,
+      }], { session });
+
+      returnItems.push(returnOrderItem[0]);
+
+      // Update batch stock
+      batchUpdates.push({
+        updateOne: {
+          filter: { product_id: item.product_id, batch_number: item.batch },
+          update: { $inc: { stock: item.units } },
+        },
+      });
+    }
+
+    if (batchUpdates.length) await Batch.bulkWrite(batchUpdates, { session });
+
+    await session.commitTransaction();
+
+    return successResponse(res, "Sale returned successfully", {
+      returnOrder: returnOrder[0],
+      items: returnItems,
+    }, 200);
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Return sale error:", error);
+    return sendError(res, "Failed to return sale order");
+  } finally {
+    session.endSession();
+  }
+};
+
+
 
 const deleteSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -481,6 +666,8 @@ const saleController = {
   getAllSales,
   getSalesByCustomer,
   getProductSales,
+  getSaleForReturn,
+  returnSaleByInvoice,
   deleteSale
 };
 

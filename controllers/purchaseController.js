@@ -1,5 +1,5 @@
 import { OrderModel as Order } from "../models/orderModel.js";
-import { OrderItemModel as OrderItem } from "../models/orderItemModel.js";
+import { OrderItemModel as OrderItem, OrderItemModel } from "../models/orderItemModel.js";
 import { SupplierModel as Supplier, SupplierModel } from "../models/supplierModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
 import { ProductModel as Product } from "../models/productModel.js";
@@ -395,6 +395,187 @@ const getProductPurchases = async (req, res) => {
   }
 };
 
+const getPurchaseForReturn = async (req, res) => {
+  try {
+    const { invoice_number, supplier_id } = req.query;
+
+    // 🔹 Validate: must have at least one of them
+    if (!invoice_number && !supplier_id) {
+      return sendError(res, "Provide either invoice number or supplier", 400);
+    }
+
+    const filter = { type: "purchase" };
+    if (invoice_number) filter.invoice_number = invoice_number;
+    if (supplier_id) filter.supplier_id = supplier_id;
+
+    let purchases;
+
+    if (invoice_number) {
+      purchases = await Order.findOne(filter)
+        .populate("supplier_id") // ✅ attach supplier info
+        .lean();
+
+      if (!purchases) {
+        return sendError(res, "Purchase order not found", 404);
+      }
+
+      // attach items + product info
+      purchases.items = await OrderItemModel.find({ order_id: purchases._id })
+        .populate("product_id")
+        .lean();
+
+    } else {
+      purchases = await Order.find(filter)
+        .populate("supplier_id") // ✅ attach supplier info
+        .lean();
+
+      if (!purchases || purchases.length === 0) {
+        return sendError(res, "No purchases found for this supplier", 404);
+      }
+
+      for (let order of purchases) {
+        order.items = await OrderItemModel.find({ order_id: order._id })
+          .populate("product_id")
+          .lean();
+      }
+    }
+
+    return successResponse(res, "Purchase order retrieved", { purchases });
+  } catch (error) {
+    console.error("Get purchase error:", error);
+    return sendError(res, "Failed to fetch product purchases");
+  }
+};
+
+
+const returnPurchaseByInvoice = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { invoice_number, items } = req.body;
+
+    if (!invoice_number || !items || items.length === 0) {
+      await session.abortTransaction();
+      return sendError(res, "Invoice number and items are required", 400);
+    }
+
+    // Fetch original purchase order
+    const purchaseOrder = await Order.findOne({ invoice_number, type: "purchase" }).session(session);
+    if (!purchaseOrder) {
+      await session.abortTransaction();
+      return sendError(res, "Purchase order not found", 404);
+    }
+
+    const supplierDoc = await SupplierModel.findById(purchaseOrder.supplier_id).session(session);
+    if (!supplierDoc) {
+      await session.abortTransaction();
+      return sendError(res, "Supplier not found", 404);
+    }
+
+    // Calculate total return amount based on actual total from OrderItem
+    let totalReturn = 0;
+    const orderItemsMap = {};
+
+    for (const item of items) {
+      const orderItem = await OrderItem.findOne({
+        order_id: purchaseOrder._id,
+        product_id: item.product_id,
+        batch: item.batch,
+      }).session(session);
+
+      if (!orderItem) {
+        await session.abortTransaction();
+        return sendError(res, `Order item not found for batch: ${item.batch}`, 404);
+      }
+
+      if (orderItem.units < item.units) {
+        await session.abortTransaction();
+        return sendError(res, `Return quantity exceeds purchased units for batch: ${item.batch}`, 400);
+      }
+
+      // Calculate total for returned units proportionally
+      const unitTotal = orderItem.total / (orderItem.units); // total per unit including tax
+      const returnTotal = unitTotal * item.units;
+      totalReturn += returnTotal;
+
+      // Save orderItem reference and return total for later use
+      orderItemsMap[item.batch] = { orderItem, returnTotal };
+    }
+
+    // Deduct from supplier credit
+    const newReceive = Math.max((supplierDoc.receive || 0) - totalReturn, 0);
+    await SupplierModel.findByIdAndUpdate(supplierDoc._id, { receive: newReceive }, { session });
+
+    // Create return order
+    const returnOrder = await Order.create([
+      {
+        invoice_number: invoice_number + "-R",
+        supplier_id: supplierDoc._id,
+        subtotal: totalReturn,
+        total: totalReturn,
+        paid_amount: 0,
+        due_amount: totalReturn,
+        net_value: totalReturn,
+        type: "purchase_return",
+        status: "returned",
+      },
+    ], { session });
+
+    const returnItems = [];
+    const batchUpdates = [];
+
+    // Process return items and update original order items
+    for (const item of items) {
+      const { orderItem, returnTotal } = orderItemsMap[item.batch];
+
+      // Deduct units from original order item
+      orderItem.units -= item.units;
+      await orderItem.save({ session });
+
+      // Create return order item
+      const returnOrderItem = await OrderItem.create([
+        {
+          order_id: returnOrder[0]._id,
+          product_id: item.product_id,
+          batch: item.batch,
+          expiry: item.expiry,
+          units: item.units,
+          unit_price: orderItem.unit_price,
+          discount: item.discount || 0,
+          total: returnTotal,
+        },
+      ], { session });
+
+      returnItems.push(returnOrderItem[0]);
+
+      // Deduct units from batch stock
+      batchUpdates.push({
+        updateOne: {
+          filter: { product_id: item.product_id, batch_number: item.batch },
+          update: { $inc: { stock: -item.units } },
+        },
+      });
+    }
+
+    if (batchUpdates.length) await Batch.bulkWrite(batchUpdates, { session });
+
+    await session.commitTransaction();
+
+    return successResponse(res, "Purchase returned successfully", {
+      returnOrder: returnOrder[0],
+      items: returnItems,
+    }, 200);
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Return purchase error:", error);
+    return sendError(res, "Failed to return product purchases");
+  } finally {
+    session.endSession();
+  }
+};
+
 
 const deletePurchase = async (req, res) => {
   const session = await mongoose.startSession();
@@ -457,7 +638,9 @@ const purchaseController = {
   createPurchase,
   getPurchasesBySupplier,
   getAllPurchases,
+  returnPurchaseByInvoice,
   getProductPurchases,
+  getPurchaseForReturn,
   deletePurchase
 };
 
