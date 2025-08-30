@@ -577,6 +577,195 @@ const returnPurchaseByInvoice = async (req, res) => {
 };
 
 
+// Get purchase by ID
+const getPurchaseById = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return sendError(res, "Invalid order ID", 400);
+    }
+
+    const order = await Order.findById(orderId)
+      .populate("supplier_id", "name company_name pay receive")
+      .lean();
+
+    if (!order) {
+      return sendError(res, "Purchase not found", 404);
+    }
+
+    // Fetch order items with product details
+    const items = await OrderItem.find({ order_id: orderId })
+      .populate("product_id", "name item_code retail_price trade_price")
+      .lean();
+
+    // ✅ Merge order + items into one object
+    const purchase = {
+      ...order,
+      items,
+    };
+
+    return successResponse(res, "Single Purchase fetched successfully", {
+      purchase,
+    });
+  } catch (error) {
+    console.error("Get purchase by ID error:", error);
+    return sendError(res, "Failed to fetch purchase");
+  }
+};
+
+
+// Edit purchase
+const editPurchase = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderId } = req.params;
+    const { invoice_number, subtotal, total, paid_amount, due_amount, net_value, status, items } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      await session.abortTransaction();
+      return sendError(res, "Invalid order ID", 400);
+    }
+
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      return sendError(res, "Purchase not found", 404);
+    }
+
+    if (order.type !== "purchase") {
+      await session.abortTransaction();
+      return sendError(res, "Not a purchase order", 400);
+    }
+
+    // ✅ Reverse old stock changes
+    const oldItems = await OrderItem.find({ order_id: orderId }).session(session);
+    for (const item of oldItems) {
+      await Batch.findOneAndUpdate(
+        { product_id: item.product_id, batch_number: item.batch },
+        { $inc: { stock: -item.units } },
+        { session }
+      );
+    }
+
+    // Delete old items
+    await OrderItem.deleteMany({ order_id: orderId }).session(session);
+
+    // ✅ Update supplier balances
+    const supplierDoc = await SupplierModel.findById(order.supplier_id).session(session);
+    if (!supplierDoc) {
+      await session.abortTransaction();
+      return sendError(res, "Supplier not found", 404);
+    }
+
+    // helper to normalize balances
+    function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
+      let pay = currentPay + addPay; // debit
+      let receive = currentReceive + addReceive; // credit
+
+      if (pay > receive) {
+        pay = pay - receive;
+        receive = 0;
+      } else {
+        receive = receive - pay;
+        pay = 0;
+      }
+      return { pay, receive };
+    }
+    // Reverse old total
+    let { pay: revPay, receive: revReceive } = adjustPayReceive(
+      supplierDoc.pay || 0,
+      supplierDoc.receive || 0,
+      0,
+      -order.total
+    );
+
+    // Apply new total
+    let { pay, receive } = adjustPayReceive(
+      revPay,
+      revReceive,
+      0,
+      total ?? order.total
+    );
+
+    await SupplierModel.findByIdAndUpdate(
+      order.supplier_id,
+      { pay, receive },
+      { session }
+    );
+
+    // ✅ Update order fields
+    order.invoice_number = invoice_number || order.invoice_number;
+    order.subtotal = subtotal ?? order.subtotal;
+    order.total = total ?? order.total;
+    order.paid_amount = paid_amount ?? order.paid_amount;
+    order.due_amount = due_amount ?? order.due_amount;
+    order.net_value = net_value ?? order.net_value;
+    order.status = status ?? order.status;
+    await order.save({ session });
+
+    // ✅ Add new items and update batches
+    const newItems = [];
+    const batchUpdates = [];
+
+    for (const item of items) {
+      const newItem = await OrderItem.create(
+        [{
+          order_id: order._id,
+          product_id: item.product_id,
+          batch: item.batch,
+          expiry: item.expiry,
+          units: item.units,
+          unit_price: item.unit_price,
+          discount: item.discount || 0,
+          total: item.total,
+        }],
+        { session }
+      );
+
+      newItems.push(newItem[0]);
+
+      batchUpdates.push({
+        updateOne: {
+          filter: { product_id: item.product_id, batch_number: item.batch },
+          update: {
+            $setOnInsert: {
+              product_id: item.product_id,
+              batch_number: item.batch,
+              purchase_price: item.unit_price,
+              expiry_date: item.expiry,
+            },
+            $inc: { stock: item.units },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    if (batchUpdates.length) {
+      await Batch.bulkWrite(batchUpdates, { session });
+    }
+
+    await session.commitTransaction();
+
+    return successResponse(res, "Purchase updated successfully", {
+      order,
+      items: newItems,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Edit purchase error:", error);
+    return sendError(res, "Failed to edit purchase");
+  } finally {
+    session.endSession();
+  }
+};
+
+
+
+
 const deletePurchase = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -641,6 +830,8 @@ const purchaseController = {
   returnPurchaseByInvoice,
   getProductPurchases,
   getPurchaseForReturn,
+  getPurchaseById,
+  editPurchase,
   deletePurchase
 };
 

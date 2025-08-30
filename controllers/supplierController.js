@@ -23,6 +23,29 @@ export const getAllSuppliers = async (req, res) => {
 };
 
 
+
+export const getAllActiveSuppliers = async (req, res) => {
+  try {
+    const filter = {
+      status: "active",
+      $or: [{ role: "supplier" }, { role: "both" }],
+    };
+
+    // Get all suppliers ()
+    const suppliers = await SupplierModel.find(filter).populate('area_id', 'name city description');
+
+    const totalSuppliers = suppliers.length;
+
+    return successResponse(res, "Suppliers fetched successfully", {
+      suppliers,
+      totalItems: totalSuppliers,
+    });
+  } catch (error) {
+    console.error("Fetch Suppliers Error:", error);
+    return sendError(res, "Failed to fetch suppliers", 500);
+  }
+};
+
 export const getSupplierById = async (req, res) => {
   try {
     const supplier = await SupplierModel.findById(req.params.id)
@@ -181,6 +204,7 @@ export const searchSuppliers = async (req, res) => {
 const supplierController = {
   getAllSuppliers,
   getSupplierById,
+  getAllActiveSuppliers,
   createSupplier,
   updateSupplier,
   deleteSupplier,

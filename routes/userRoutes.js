@@ -9,19 +9,9 @@ const uploadUsers = createUploader("users");
 
 router.get("/bookers", userController.getAllBookers);
 router.get("/", userController.getAllUsers);
+router.get("/active", userController.getAllActiveUsers);
 router.get("/:id", userController.getUserById);
-router.post(
-    "/",
-    uploadUsers.fields([
-        { name: "profile_photo", maxCount: 1 },
-        { name: "cnic_front", maxCount: 1 },
-        { name: "cnic_back", maxCount: 1 },
-        { name: "cheque_photo", maxCount: 1 },
-        { name: "e_stamp", maxCount: 1 }
-    ]),
-    userController.createUser
-);
-
+router.post("/",userController.createUser);
 router.put("/:id", userController.updateUser);
 router.delete("/:id", userController.deleteUser);
 router.patch("/toggle-status", userController.toggleUserStatus);

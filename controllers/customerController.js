@@ -27,6 +27,33 @@ export const getAllCustomers = async (req, res) => {
   }
 };
 
+export const getAllActiveCustomers = async (req, res) => {
+  try {
+    const filter = {
+      $and: [
+        { status: "active" },
+        { $or: [{ role: "customer" }, { role: "both" }] }
+      ]
+    };
+
+
+    // Fetch all matching customers 
+    const customers = await SupplierModel.find(filter)
+      .populate('area_id', 'name city description')
+      .populate('booker_id', 'name');
+
+    // Total count of customers (optional, just for info)
+    const totalCustomers = customers.length;
+
+    return successResponse(res, "Customers fetched successfully", {
+      customers,
+      totalItems: totalCustomers,
+    });
+  } catch (error) {
+    console.error("Fetch Customers Error:", error);
+    return sendError(res, "Failed to fetch customers", 500);
+  }
+};
 
 // Get all customers without pagination (for dropdowns etc.)
 export const getCustomerList = async (req, res) => {
@@ -246,6 +273,7 @@ const customerController = {
   editCustomer,
   showCustomer,
   createCustomer,
+  getAllActiveCustomers,
   updateCustomer,
   deleteCustomer,
   toggleCustomerStatus,

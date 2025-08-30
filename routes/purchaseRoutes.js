@@ -21,6 +21,12 @@ router.get("/return/search", purchaseController.getPurchaseForReturn);
 // 📤 Get product purchase history
 router.get("/product-purchases/:productId", purchaseController.getProductPurchases);
 
+// get purchase
+router.get("/:orderId", purchaseController.getPurchaseById);
+
+// get purchase
+router.put("/:orderId", purchaseController.editPurchase);
+
 // ❌ Delete purchase
 router.delete("/:orderId", purchaseController.deletePurchase);
 

@@ -35,6 +35,34 @@ const getAllUsers = async (req, res) => {
 
 
 
+const getAllActiveUsers = async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    const query = {
+      email: { $ne: "admin@gmail.com" },
+      status: "active",
+    };
+
+    if (status !== undefined) {
+      query.status = status;
+    }
+
+    // Fetch all users except admin
+    const users = await User.find(query)
+      .sort({ createdAt: -1 })
+      .populate("area_id", "name city description");
+
+    return successResponse(res, "Users fetched successfully", {
+      users,
+      totalItems: users.length,
+    });
+  } catch (error) {
+    return sendError(res, "Failed to fetch users", error);
+  }
+};
+
+
 // GET single user
 const getUserById = async (req, res) => {
   try {
@@ -159,7 +187,7 @@ const updateUser = async (req, res) => {
 
     // Handle image fields - only update if they have non-empty values
     const imageFields = ['profile_photo', 'cnic_front', 'cnic_back', 'cheque_photo', 'e_stamp'];
-    
+
     imageFields.forEach(field => {
       if (userData[field] !== undefined && userData[field] !== null && userData[field] !== "") {
         user[field] = userData[field];
@@ -235,6 +263,7 @@ const userController = {
   getUserById,
   createUser,
   updateUser,
+  getAllActiveUsers,
   deleteUser,
   toggleUserStatus,
   getUserLedger,

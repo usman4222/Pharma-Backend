@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.post("/", areaController.createArea);
 router.get("/", areaController.getAllAreas);
+router.get("/active", areaController.getAllActiveAreas);
 router.get("/:id", areaController.getAreaById);
 router.put("/:id", areaController.updateArea);
 router.delete("/:id", areaController.deleteArea);
