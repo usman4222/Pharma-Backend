@@ -22,57 +22,27 @@ const createPurchase = async (req, res) => {
       paid_amount,
       due_amount,
       net_value,
+      due_date,
+      note,
       items, // Array of order items
       type = "purchase",
       status,
     } = req.body;
 
-    console.log("Received status:", req.body.status);
-
-    // Validate ALL required fields
-    const requiredFields = {
-      invoice_number,
-      supplier_id,
-      subtotal,
-      total,
-      paid_amount,
-      due_amount,
-      net_value,
-      items,
-    };
-
+    // Validate required fields
+    const requiredFields = { invoice_number, supplier_id, subtotal, total, paid_amount, due_amount, net_value, items };
     const missingFields = Object.entries(requiredFields)
-      .filter(([_, value]) => value === undefined || value === null || value === "")
+      .filter(([_, value]) => value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0))
       .map(([key]) => key);
 
     if (missingFields.length > 0) {
       await session.abortTransaction();
-      return sendError(
-        res,
-        `Missing required fields: ${missingFields.join(", ")}`,
-        400
-      );
+      return sendError(res, `Missing required fields: ${missingFields.join(", ")}`, 400);
     }
 
-    // Validate type is purchase
     if (type !== "purchase") {
       await session.abortTransaction();
       return sendError(res, "Invalid order type", 400);
-    }
-
-    // helper to normalize balances
-    function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
-      let pay = currentPay + addPay; // debit
-      let receive = currentReceive + addReceive; // credit
-
-      if (pay > receive) {
-        pay = pay - receive;
-        receive = 0;
-      } else {
-        receive = receive - pay;
-        pay = 0;
-      }
-      return { pay, receive };
     }
 
     // 🔹 Get supplier
@@ -82,42 +52,33 @@ const createPurchase = async (req, res) => {
       return sendError(res, "Supplier not found", 404);
     }
 
-    // 🔹 Adjust supplier balances
-    const { pay, receive } = adjustPayReceive(
-      supplierDoc.pay || 0,
-      supplierDoc.receive || 0,
-      0,      // purchase does not add debit
-      total   // purchase adds credit
-    );
+    // 🔹 Adjust supplier balance: purchases increase receive (credit)
+    const updatedPay = supplierDoc.pay || 0; // debit unchanged
+    const updatedReceive = (supplierDoc.receive || 0) + total; // credit increases by total
 
     await SupplierModel.findByIdAndUpdate(
       supplier_id,
-      { pay, receive },
+      { pay: updatedPay, receive: updatedReceive },
       { session }
     );
 
     // 🔹 Create new order
     const newOrder = await Order.create(
-      [
-        {
-          invoice_number,
-          supplier_id,
-          subtotal,
-          total,
-          paid_amount,
-          due_amount,
-          net_value,
-          type,
-          status,
-        },
-      ],
+      {
+        invoice_number,
+        supplier_id,
+        subtotal,
+        total,
+        paid_amount,
+        due_amount,
+        net_value,
+        type,
+        status,
+        note,
+        due_date,
+      },
       { session }
     );
-
-    if (!newOrder?.length) {
-      await session.abortTransaction();
-      return sendError(res, "Failed to create order", 500);
-    }
 
     // 🔹 Process order items and batches
     const orderItems = [];
@@ -133,30 +94,25 @@ const createPurchase = async (req, res) => {
 
       // Create order item
       const orderItem = await OrderItem.create(
-        [
-          {
-            order_id: newOrder[0]._id,
-            product_id: item.product_id,
-            batch: item.batch,
-            expiry: item.expiry,
-            units: item.units,
-            unit_price: item.unit_price,
-            discount: item.discount || 0,
-            total: item.total,
-          },
-        ],
+        {
+          order_id: newOrder._id,
+          product_id: item.product_id,
+          batch: item.batch,
+          expiry: item.expiry,
+          units: item.units,
+          unit_price: item.unit_price,
+          discount: item.discount || 0,
+          total: item.total,
+        },
         { session }
       );
 
-      orderItems.push(orderItem[0]);
+      orderItems.push(orderItem);
 
-      // Create or update batch
+      // Prepare batch update
       batchUpdates.push({
         updateOne: {
-          filter: {
-            product_id: item.product_id,
-            batch_number: item.batch,
-          },
+          filter: { product_id: item.product_id, batch_number: item.batch },
           update: {
             $setOnInsert: {
               product_id: item.product_id,
@@ -176,19 +132,10 @@ const createPurchase = async (req, res) => {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
-    // ✅ removed duplicate supplier pay update
-
     await session.commitTransaction();
 
-    return successResponse(
-      res,
-      "Purchase order created successfully",
-      {
-        order: newOrder[0],
-        items: orderItems,
-      },
-      201
-    );
+    return successResponse(res, "Purchase order created successfully", { order: newOrder, items: orderItems }, 201);
+
   } catch (error) {
     await session.abortTransaction();
     console.error("Purchase error:", error);

@@ -78,6 +78,7 @@ const getUserById = async (req, res) => {
 // CREATE user
 export const createUser = async (req, res) => {
   try {
+
     const {
       name,
       father_name,
@@ -100,7 +101,7 @@ export const createUser = async (req, res) => {
       cnic_back,
       cheque_photo,
       e_stamp
-    } = req.body;
+    } = req.body || {};
 
     // Required field validation
     if (!name) {

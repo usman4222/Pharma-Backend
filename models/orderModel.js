@@ -11,6 +11,7 @@ const orderSchema = new mongoose.Schema(
     due_amount: { type: Number, required: true },
     due_date: { type: Date, default: null },
     net_value: { type: Number, required: true },
+    note: { type: String },
     type: {
       type: String,
       enum: ["purchase", "sale", "estimated", "purchase_return", "sale_return"],

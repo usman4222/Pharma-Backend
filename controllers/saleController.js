@@ -23,6 +23,7 @@ const createSale = async (req, res) => {
       due_amount,
       net_value,
       due_date,
+      note,
       items,
       type = "sale",
       status,
@@ -37,7 +38,6 @@ const createSale = async (req, res) => {
       paid_amount,
       due_amount,
       net_value,
-      due_date,
       items,
     };
 
@@ -117,6 +117,7 @@ const createSale = async (req, res) => {
           paid_amount,
           due_amount,
           net_value,
+          note,
           due_date,
           type,
           status,
@@ -605,6 +606,44 @@ const returnSaleByInvoice = async (req, res) => {
 };
 
 
+// Get sale by ID
+const getSaleById = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return sendError(res, "Invalid order ID", 400);
+    }
+
+    // Fetch the sale order
+    const saleOrder = await Order.findById(orderId)
+      .populate("supplier_id", "company_name owner1_name role") // attach customer info
+      .populate("booker_id", "name") // attach booker info
+      .lean();
+
+    if (!saleOrder) {
+      return sendError(res, "Sale order not found", 404);
+    }
+
+    if (saleOrder.type !== "sale" && saleOrder.type !== "sale_return") {
+      return sendError(res, "Not a sale order", 400);
+    }
+
+    // Fetch order items with product info
+    const items = await OrderItemModel.find({ order_id: orderId })
+      .populate("product_id", "name item_code retail_price trade_price")
+      .lean();
+
+    saleOrder.items = items;
+
+    return successResponse(res, "Sale order retrieved successfully", { saleOrder });
+  } catch (error) {
+    console.error("Get sale by ID error:", error);
+    return sendError(res, "Failed to fetch sale order");
+  }
+};
+
+
 
 const deleteSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -668,6 +707,7 @@ const saleController = {
   getProductSales,
   getSaleForReturn,
   returnSaleByInvoice,
+  getSaleById,
   deleteSale
 };
 
