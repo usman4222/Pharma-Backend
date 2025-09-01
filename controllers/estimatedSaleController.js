@@ -14,97 +14,35 @@ const createEstimatedSale = async (req, res) => {
     try {
         const {
             invoice_number,
-            supplier_id,
-            booker_id,
+            estimate_customer_name,
             subtotal,
             total,
             paid_amount,
-            due_amount,
             net_value,
             due_date,
             items,
             type = "estimated",
-            status = "completed"
+            status = "completed",
         } = req.body;
-
-        const requiredFields = {
-            invoice_number,
-            supplier_id,
-            subtotal,
-            total,
-            paid_amount,
-            due_amount,
-            net_value,
-            due_date,
-            items,
-        };
-
-        const missingFields = Object.entries(requiredFields)
-            .filter(([_, value]) => value === undefined || value === null || value === '')
-            .map(([key]) => key);
-
-        if (missingFields.length > 0) {
-            await session.abortTransaction();
-            return sendError(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
-        }
 
         if (type !== "estimated") {
             await session.abortTransaction();
             return sendError(res, "Invalid order type", 400);
         }
 
-        const supplier = await Supplier.findById(supplier_id).session(session);
-        if (!supplier) {
-            await session.abortTransaction();
-            return sendError(res, "Supplier (Customer) not found", 404);
-        }
-
-        if (booker_id) {
-            const booker = await User.findById(booker_id).session(session);
-            if (!booker) {
-                await session.abortTransaction();
-                return sendError(res, "Booker not found", 404);
-            }
-        }
-
-        // Validate product stock availability BEFORE creating the order
-        for (const item of items) {
-            const batchStock = await Batch.aggregate([
-                {
-                    $match: { product_id: new mongoose.Types.ObjectId(item.product_id) }
-                },
-                {
-                    $group: {
-                        _id: "$product_id",
-                        totalStock: { $sum: "$stock" }
-                    }
-                }
-            ]);
-
-            const availableStock = batchStock[0]?.totalStock || 0;
-            if (item.units > availableStock) {
-                await session.abortTransaction();
-                return sendError(
-                    res,
-                    `Insufficient stock for product ${item.product_id}. Available: ${availableStock}, Requested: ${item.units}`,
-                    400
-                );
-            }
-        }
-
+        // Directly create the order without verifying customer/product
         const newOrder = await Order.create(
             [
                 {
                     invoice_number,
-                    supplier_id,
-                    booker_id,
+                    estimate_customer_name,
                     subtotal,
                     total,
                     paid_amount,
-                    due_amount,
                     net_value,
                     due_date,
                     type,
+                    status,
                 },
             ],
             { session }
@@ -118,17 +56,12 @@ const createEstimatedSale = async (req, res) => {
         const orderItems = [];
 
         for (const item of items) {
-            const product = await Product.findById(item.product_id).session(session);
-            if (!product) {
-                await session.abortTransaction();
-                return sendError(res, `Product not found: ${item.product_id}`, 404);
-            }
-
+            // Direct save, no product check
             const orderItem = await OrderItem.create(
                 [
                     {
                         order_id: newOrder[0]._id,
-                        product_id: item.product_id,
+                        estimate_product_name: item.estimate_product_name,
                         batch: item.batch,
                         expiry: item.expiry,
                         units: item.units,
@@ -156,54 +89,10 @@ const createEstimatedSale = async (req, res) => {
         );
     } catch (error) {
         await session.abortTransaction();
-        console.error("Sale error:", error);
+        console.error("Estimated Sale error:", error);
         return sendError(res, error.message);
     } finally {
         session.endSession();
-    }
-};
-
-
-// Get all sales by Customer ID
-const getSalesByCustomer = async (req, res) => {
-    try {
-        const { customerId } = req.params;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-
-        // Check if customer exists
-        const customer = await Supplier.findById(customerId);
-        if (!customer) {
-            return sendError(res, "Customer not found", 404);
-        }
-
-        // Get sales with pagination
-        const sales = await Order.find({ supplier_id: customerId, type: "sale" })
-            .populate('supplier_id', 'owner1_name')
-            .populate('booker_id', 'name')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit);
-
-        // Get total count for pagination
-        const totalSales = await Order.countDocuments({ supplier_id: customerId, type: "sale" });
-        const totalPages = Math.ceil(totalSales / limit);
-        const hasMore = page < totalPages;
-
-        return successResponse(res, "Sales fetched successfully", {
-            sales,
-            totalSales,
-            currentPage: page,
-            totalPages,
-            totalItems: totalSales,
-            pageSize: limit,
-            hasMore
-        });
-
-    } catch (error) {
-        console.error("Get sales by supplier error:", error);
-        return sendError(res, "Failed to fetch sales by supplier");
     }
 };
 
@@ -215,28 +104,47 @@ const getAllEstimatedSales = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Get all sale orders with pagination
+        // Step 1: Get all sale orders with pagination
         const estimatedSales = await Order.find({ type: "estimated" })
-            .populate('supplier_id', 'owner1_name')
-            .populate('booker_id', 'name')
+            .populate("supplier_id", "owner1_name")
+            .populate("booker_id", "name")
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        // Get total count for pagination
+        // Step 2: Get all orderIds
+        const orderIds = estimatedSales.map((order) => order._id);
+
+        // Step 3: Fetch all items for these orders
+        const items = await OrderItem.find({ order_id: { $in: orderIds } }).lean();
+
+        // Step 4: Group items by order_id
+        const itemsByOrder = items.reduce((acc, item) => {
+            if (!acc[item.order_id]) acc[item.order_id] = [];
+            acc[item.order_id].push(item);
+            return acc;
+        }, {});
+
+        // Step 5: Attach items to orders
+        const ordersWithItems = estimatedSales.map((order) => ({
+            ...order,
+            items: itemsByOrder[order._id] || [],
+        }));
+
+        // Step 6: Pagination metadata
         const totalSales = await Order.countDocuments({ type: "estimated" });
         const totalPages = Math.ceil(totalSales / limit);
         const hasMore = page < totalPages;
 
         return successResponse(res, "Estimated Sale orders fetched successfully", {
-            estimatedSales,
+            estimatedSales: ordersWithItems,
             currentPage: page,
             totalPages,
             totalItems: totalSales,
             pageSize: limit,
-            hasMore
+            hasMore,
         });
-
     } catch (error) {
         console.error("Get all estimated sale orders error:", error);
         return sendError(res, "Failed to fetch estimated sales orders");
@@ -244,125 +152,35 @@ const getAllEstimatedSales = async (req, res) => {
 };
 
 
-// Get all sales for a specific product
-const getProductSales = async (req, res) => {
+// Get one sale by ID
+const getEstimatedSaleById = async (req, res) => {
     try {
-        const { productId } = req.params;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+        const { orderId } = req.params;
 
-        // Check if product exists and get product prices
-        const product = await Product.findById(productId)
-            .select('name item_code retail_price trade_price');
-        if (!product) {
-            return sendError(res, "Product not found", 404);
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            return sendError(res, "Invalid order ID", 400);
         }
 
-        // First get count for pagination
-        const totalOrderItems = await OrderItem.countDocuments({
-            product_id: productId,
-            'order_id.type': 'sale'
-        }).populate('order_id');
+        const order = await Order.findOne({ _id: orderId, type: "estimated" })
+            .populate("supplier_id", "owner1_name")
+            .populate("booker_id", "name")
+            .lean();
 
-        const totalPages = Math.ceil(totalOrderItems / limit);
-        const hasMore = page < totalPages;
+        if (!order) {
+            return sendError(res, "Estimated Sale not found", 404);
+        }
 
-        // Get order items with necessary data in one optimized query
-        const orderItems = await OrderItem.aggregate([
-            {
-                $match: { product_id: new mongoose.Types.ObjectId(productId) }
-            },
-            {
-                $lookup: {
-                    from: 'orders',
-                    localField: 'order_id',
-                    foreignField: '_id',
-                    as: 'order'
-                }
-            },
-            { $unwind: '$order' },
-            {
-                $match: { 'order.type': 'sale' }
-            },
-            {
-                $lookup: {
-                    from: 'suppliers',
-                    localField: 'order.supplier_id',
-                    foreignField: '_id',
-                    as: 'supplier'
-                }
-            },
-            { $unwind: { path: '$supplier', preserveNullAndEmptyArrays: true } },
-            {
-                $project: {
-                    _id: 0,
-                    date: '$order.createdAt',
-                    invoice_number: '$order.invoice_number',
-                    type: '$order.type',
-                    supplier: '$supplier.name',
-                    batch: '$batch',
-                    expiry: '$expiry',
-                    units: '$units',
-                    unit_price: '$unit_price',
-                    discount: '$discount',
-                    total: '$total',
-                    retail_price: product.retail_price,
-                    trade_price: product.trade_price
-                }
-            },
-            { $skip: skip },
-            { $limit: limit },
-            { $sort: { date: -1 } }
-        ]);
+        const items = await OrderItem.find({ order_id: orderId }).lean();
 
-        // Calculate product in/out and total stock
-        const stockData = await Batch.aggregate([
-            {
-                $match: { product_id: new mongoose.Types.ObjectId(productId) }
-            },
-            {
-                $group: {
-                    _id: null,
-                    totalStock: { $sum: '$stock' },
-                    productIn: { $sum: '$stock' } // For sales, product in = stock
-                }
-            }
-        ]);
-
-        const productOut = 0; // Would need sales data to calculate this
-        const stockInfo = stockData.length > 0 ? stockData[0] : {
-            totalStock: 0,
-            productIn: 0
-        };
-
-        return successResponse(res, "Product sales fetched successfully", {
-            sales: orderItems,
-            stockInfo: {
-                productIn: stockInfo.productIn,
-                productOut,
-                totalStock: stockInfo.totalStock
-            },
-            product: {
-                _id: product._id,
-                name: product.name,
-                item_code: product.item_code,
-                retail_price: product.retail_price,
-                trade_price: product.trade_price
-            },
-            currentPage: page,
-            totalPages,
-            totalItems: totalOrderItems,
-            pageSize: limit,
-            hasMore
+        return successResponse(res, "Estimated Sale fetched successfully", {
+            ...order,
+            items,
         });
-
     } catch (error) {
-        console.error("Get sales by product error:", error);
-        return sendError(res, "Failed to fetch product sales");
+        console.error("Get Estimated Sale by ID error:", error);
+        return sendError(res, "Failed to fetch estimated sale");
     }
 };
-
 
 const deleteEstimatedSale = async (req, res) => {
     const session = await mongoose.startSession();
@@ -411,13 +229,104 @@ const deleteEstimatedSale = async (req, res) => {
 };
 
 
+const updateEstimatedSale = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const { orderId } = req.params;
+        const {
+            invoice_number,
+            estimate_customer_name,
+            subtotal,
+            total,
+            paid_amount,
+            net_value,
+            due_date,
+            items,
+            status,
+        } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            await session.abortTransaction();
+            return sendError(res, "Invalid order ID", 400);
+        }
+
+        // Step 1: Find the order
+        const existingOrder = await Order.findById(orderId).session(session);
+        if (!existingOrder) {
+            await session.abortTransaction();
+            return sendError(res, "Estimated Sale not found", 404);
+        }
+
+        if (existingOrder.type !== "estimated") {
+            await session.abortTransaction();
+            return sendError(res, "Cannot update: Not an estimated sale", 400);
+        }
+
+        // Step 2: Update order fields
+        existingOrder.invoice_number = invoice_number || existingOrder.invoice_number;
+        existingOrder.estimate_customer_name = estimate_customer_name || existingOrder.estimate_customer_name;
+        existingOrder.subtotal = subtotal ?? existingOrder.subtotal;
+        existingOrder.total = total ?? existingOrder.total;
+        existingOrder.paid_amount = paid_amount ?? existingOrder.paid_amount;
+        existingOrder.net_value = net_value ?? existingOrder.net_value;
+        existingOrder.due_date = due_date || existingOrder.due_date;
+        existingOrder.status = status || existingOrder.status;
+
+        await existingOrder.save({ session });
+
+        // Step 3: Delete old items and re-add new ones
+        if (items && Array.isArray(items)) {
+            await OrderItem.deleteMany({ order_id: orderId }).session(session);
+
+            const newItems = [];
+            for (const item of items) {
+                const orderItem = await OrderItem.create(
+                    [
+                        {
+                            order_id: orderId,
+                            estimate_product_name: item.estimate_product_name,
+                            batch: item.batch,
+                            expiry: item.expiry,
+                            units: item.units,
+                            unit_price: item.unit_price,
+                            discount: item.discount || 0,
+                            total: item.total,
+                        },
+                    ],
+                    { session }
+                );
+                newItems.push(orderItem[0]);
+            }
+
+            await session.commitTransaction();
+            return successResponse(res, "Estimated Sale updated successfully", {
+                order: existingOrder,
+                items: newItems,
+            });
+        }
+
+        await session.commitTransaction();
+        return successResponse(res, "Estimated Sale updated successfully", {
+            order: existingOrder,
+        });
+    } catch (error) {
+        await session.abortTransaction();
+        console.error("Update Estimated Sale error:", error);
+        return sendError(res, error.message || "Failed to update estimated sale");
+    } finally {
+        session.endSession();
+    }
+};
+
 // Export all like you mentioned
 const estimatedSaleController = {
     createEstimatedSale,
     getAllEstimatedSales,
-    //   getSalesByCustomer,
-    //   getProductSales,
-    deleteEstimatedSale
+    deleteEstimatedSale,
+    getEstimatedSaleById,
+    updateEstimatedSale
 };
 
 export default estimatedSaleController;

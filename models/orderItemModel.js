@@ -10,16 +10,16 @@ const orderItemSchema = new mongoose.Schema(
     product_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
-      required: true,
+    },
+    estimate_product_name: {
+      type: String,
+      default: ""
     },
     batch: {
       type: String,
       required: true,
     },
-    expiry: {
-      type: Date,
-      required: true,
-    },
+    expiry: { type: Date, default: null }, 
     units: {
       type: Number,
       required: true,

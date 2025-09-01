@@ -1,9 +1,9 @@
 import { successResponse, sendError } from "../utils/response.js";
 import { ProductModel as Product } from "../models/productModel.js";
-import {OrderModel as Order} from "../models/orderModel.js";
-import {OrderItemModel as OrderItem} from "../models/orderItemModel.js";
+import { OrderModel as Order } from "../models/orderModel.js";
+import { OrderItemModel as OrderItem } from "../models/orderItemModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
-import {SupplierModel as Supplier} from "../models/supplierModel.js";
+import { SupplierModel as Supplier } from "../models/supplierModel.js";
 import mongoose from "mongoose";
 
 
@@ -658,6 +658,83 @@ export const deleteProduct = async (req, res) => {
 };
 
 
+export const getProductTransactions = async (req, res) => {
+  const { product_id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(product_id)) {
+    return sendError(res, "Invalid product ID", 400);
+  }
+
+  try {
+    const product = await Product.findById(product_id);
+    if (!product) {
+      return sendError(res, "Product not found", 404);
+    }
+
+    // 🔹 Get all sale orders for this product
+    const saleItems = await OrderItem.find({ product_id })
+      .populate({
+        path: "order_id",
+        match: { type: "sale" },
+        select: "invoice_number supplier_id total paid_amount due_amount net_value note due_date status",
+        populate: { path: "supplier_id", select: "name" },
+      })
+      .lean();
+
+    const saleOrders = saleItems
+      .filter(item => item.order_id !== null)
+      .map(item => ({
+        order_id: item.order_id._id,
+        invoice_number: item.order_id.invoice_number,
+        supplier: item.order_id.supplier_id?.name || null,
+        units: item.units,
+        unit_price: item.unit_price,
+        total: item.total,
+        batch: item.batch,
+        expiry: item.expiry,
+        status: item.order_id.status,
+        type: "sale",
+        date: item.order_id.createdAt,
+      }));
+
+    // 🔹 Get all purchase orders for this product
+    const purchaseItems = await OrderItem.find({ product_id })
+      .populate({
+        path: "order_id",
+        match: { type: "purchase" },
+        select: "invoice_number supplier_id total paid_amount due_amount net_value note due_date status",
+        populate: { path: "supplier_id", select: "name" },
+      })
+      .lean();
+
+    const purchaseOrders = purchaseItems
+      .filter(item => item.order_id !== null)
+      .map(item => ({
+        order_id: item.order_id._id,
+        invoice_number: item.order_id.invoice_number,
+        supplier: item.order_id.supplier_id?.name || null,
+        units: item.units,
+        unit_price: item.unit_price,
+        total: item.total,
+        batch: item.batch,
+        expiry: item.expiry,
+        status: item.order_id.status,
+        type: "purchase",
+        date: item.order_id.createdAt,
+      }));
+
+    return successResponse(res, "Product transactions fetched successfully", {
+      product: { _id: product._id, name: product.name },
+      sales: saleOrders,
+      purchases: purchaseOrders,
+    });
+  } catch (error) {
+    console.error("Get Product Transactions Error:", error);
+    return sendError(res, "Failed to fetch product transactions", 500);
+  }
+};
+
+
 
 const productController = {
   createProduct,
@@ -665,6 +742,7 @@ const productController = {
   getProductById,
   updateProduct,
   deleteProduct,
+  getProductTransactions
 };
 
 export default productController;
