@@ -129,7 +129,7 @@ const createPurchase = async (req, res) => {
             order_id: newOrder._id,
             product_id: item.product_id,
             batch: item.batch,
-            expiry: expiryDate, 
+            expiry: expiryDate,
             units: item.units,
             unit_price: item.unit_price,
             discount: item.discount || 0,
@@ -150,7 +150,7 @@ const createPurchase = async (req, res) => {
               product_id: item.product_id,
               batch_number: item.batch,
               purchase_price: item.unit_price,
-              expiry_date: expiryDate, 
+              expiry_date: expiryDate,
             },
             $inc: { stock: item.units },
           },
@@ -225,20 +225,34 @@ const getPurchasesBySupplier = async (req, res) => {
   }
 };
 
-// Get all purchases by type (purchase)
 const getAllPurchases = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Get all purchase orders with pagination
+    // Fetch purchases with supplier and items populated
     const purchases = await Order.find({ type: "purchase" })
-      .populate('supplier_id', 'company_name role')
-      // .populate('booker_id', 'name')
+      .populate("supplier_id", "company_name role") // supplier info
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean(); // convert to plain JS objects for easier modification
+
+    // Fetch OrderItems and attach product details
+    const purchaseIds = purchases.map((order) => order._id);
+
+    const orderItems = await OrderItem.find({ order_id: { $in: purchaseIds } })
+      .populate("product_id", "name category unit") // include product info
+      .lean();
+
+    // Attach items to their corresponding purchase
+    const purchasesWithItems = purchases.map((order) => {
+      const items = orderItems.filter(
+        (item) => item.order_id.toString() === order._id.toString()
+      );
+      return { ...order, items };
+    });
 
     // Get total count for pagination
     const totalPurchases = await Order.countDocuments({ type: "purchase" });
@@ -246,19 +260,19 @@ const getAllPurchases = async (req, res) => {
     const hasMore = page < totalPages;
 
     return successResponse(res, "Purchase orders fetched successfully", {
-      purchases,
+      purchases: purchasesWithItems,
       currentPage: page,
       totalPages,
       totalItems: totalPurchases,
       pageSize: limit,
-      hasMore
+      hasMore,
     });
-
   } catch (error) {
     console.error("Get all purchase orders error:", error);
     return sendError(res, "Failed to fetch purchase orders");
   }
 };
+
 
 
 // Get all purchases for a specific product
@@ -561,6 +575,54 @@ const returnPurchaseByInvoice = async (req, res) => {
   }
 };
 
+const getAllPurchaseReturns = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Fetch all purchase return orders
+    const returnOrders = await Order.find({ type: "purchase_return" })
+      .populate("supplier_id", "company_name role")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get all return order items
+    const returnOrderIds = returnOrders.map((order) => order._id);
+    const returnItems = await OrderItem.find({ order_id: { $in: returnOrderIds } })
+      .populate("product_id", "name category unit")
+      .lean();
+
+    // Attach items to their respective return order
+    const returnsWithItems = returnOrders.map((order) => {
+      const items = returnItems.filter(
+        (item) => item.order_id.toString() === order._id.toString()
+      );
+      return { ...order, items };
+    });
+
+    // Pagination info
+    const totalReturns = await Order.countDocuments({ type: "purchase_return" });
+    const totalPages = Math.ceil(totalReturns / limit);
+    const hasMore = page < totalPages;
+
+    return successResponse(res, "Purchase returns fetched successfully", {
+      returns: returnsWithItems,
+      currentPage: page,
+      totalPages,
+      totalItems: totalReturns,
+      pageSize: limit,
+      hasMore,
+    });
+
+  } catch (error) {
+    console.error("Get all purchase returns error:", error);
+    return sendError(res, "Failed to fetch purchase returns");
+  }
+};
+
 
 // Get purchase by ID
 const getPurchaseById = async (req, res) => {
@@ -813,6 +875,7 @@ const purchaseController = {
   getPurchasesBySupplier,
   getAllPurchases,
   returnPurchaseByInvoice,
+  getAllPurchaseReturns,
   getProductPurchases,
   getPurchaseForReturn,
   getPurchaseById,

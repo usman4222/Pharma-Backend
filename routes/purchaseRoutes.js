@@ -13,10 +13,13 @@ router.post("/return", purchaseController.returnPurchaseByInvoice);
 router.get("/supplier/:supplierId", purchaseController.getPurchasesBySupplier);
 
 // 📤 Get all purchases
-router.get("/", purchaseController.getAllPurchases);
+router.get("/", purchaseController.getAllPurchases); 
 
 // 📤 Get purchase for return (by invoice_number or supplier_id)
 router.get("/return/search", purchaseController.getPurchaseForReturn);
+
+//return purchase
+router.get("/purchase-return", purchaseController.getAllPurchaseReturns);
 
 // 📤 Get product purchase history
 router.get("/product-purchases/:productId", purchaseController.getProductPurchases);

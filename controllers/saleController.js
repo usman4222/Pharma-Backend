@@ -615,6 +615,51 @@ const returnSaleByInvoice = async (req, res) => {
 };
 
 
+// GET all sale returns with their items
+export const getAllSaleReturns = async (req, res) => {
+
+  try {
+    const { page = 1, limit = 10 } = req.query;
+
+    // Fetch sale returns with pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const returns = await Order.find({ type: "sale_return" })
+      .populate("supplier_id", "_id company_name role")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const totalItems = await Order.countDocuments({ type: "sale_return" });
+    const totalPages = Math.ceil(totalItems / parseInt(limit));
+
+    // Populate items for each return order
+    const returnsWithItems = await Promise.all(
+      returns.map(async (ret) => {
+        const items = await OrderItem.find({ order_id: ret._id }).populate(
+          "product_id",
+          "_id name"
+        );
+        return {
+          ...ret.toObject(),
+          items,
+        };
+      })
+    );
+
+    return successResponse(res, "Sale returns fetched successfully", {
+      returns: returnsWithItems,
+      currentPage: parseInt(page),
+      totalPages,
+      totalItems,
+      pageSize: parseInt(limit),
+      hasMore: parseInt(page) < totalPages,
+    });
+  } catch (error) {
+    console.error("Error fetching sale returns:", error);
+    return sendError(res, "Failed to fetch sale returns");
+  }
+};
 // Get sale by ID
 const getSaleById = async (req, res) => {
   try {
@@ -715,6 +760,7 @@ const saleController = {
   getSalesByCustomer,
   getProductSales,
   getSaleForReturn,
+  getAllSaleReturns,
   returnSaleByInvoice,
   getSaleById,
   deleteSale
