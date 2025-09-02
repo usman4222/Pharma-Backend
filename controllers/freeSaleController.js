@@ -23,12 +23,12 @@ const createFreeSale = async (req, res) => {
         if (!finalInvoiceNumber) {
             // Get the last free sale to generate incremental number
             const lastFreeSale = await FreeSale.findOne().sort({ createdAt: -1 }).session(session);
-            
+
             // Start from FREE-0001 if no sales exist yet
-            const lastNumber = lastFreeSale?.invoice_number 
-                ? parseInt(lastFreeSale.invoice_number.split('-')[1]) || 0 
+            const lastNumber = lastFreeSale?.invoice_number
+                ? parseInt(lastFreeSale.invoice_number.split('-')[1]) || 0
                 : 0;
-                
+
             finalInvoiceNumber = `FREE-${(lastNumber + 1).toString().padStart(4, '0')}`;
         }
 
@@ -63,6 +63,12 @@ const createFreeSale = async (req, res) => {
             return sendError(res, `Insufficient stock. Only ${quantity - remainingQty} available`, 400);
         }
 
+        let formattedExpiry = null;
+        if (expiry) {
+            const [month, year] = expiry.split("/"); // "11/2012"
+            formattedExpiry = new Date(`${year}-${month}-01`);
+        }
+
         // Create the sale record
         const newFreeSale = new FreeSale({
             invoice_number: finalInvoiceNumber,
@@ -71,7 +77,7 @@ const createFreeSale = async (req, res) => {
             sale_person,
             sale_date: new Date(),
             batch,
-            expiry,
+            expiry: formattedExpiry,
             quantity,
             sub_total
         });
@@ -154,7 +160,7 @@ const getFreeSaleById = async (req, res) => {
             return sendError(res, "Free sale not found", 404);
         }
 
-        return successResponse(res, "Free sale fetched successfully", freeSale);
+        return successResponse(res, "Free sale fetched successfully", { freeSale });
     } catch (error) {
         console.error("Get Free Sale By ID Error:", error);
         return sendError(res, "Failed to fetch free sale", 500);

@@ -30,14 +30,33 @@ const createPurchase = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    const requiredFields = { invoice_number, supplier_id, subtotal, total, paid_amount, due_amount, net_value, items };
+    const requiredFields = {
+      invoice_number,
+      supplier_id,
+      subtotal,
+      total,
+      paid_amount,
+      net_value,
+      items,
+    };
+
     const missingFields = Object.entries(requiredFields)
-      .filter(([_, value]) => value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0))
+      .filter(
+        ([_, value]) =>
+          value === undefined ||
+          value === null ||
+          value === "" ||
+          (Array.isArray(value) && value.length === 0)
+      )
       .map(([key]) => key);
 
     if (missingFields.length > 0) {
       await session.abortTransaction();
-      return sendError(res, `Missing required fields: ${missingFields.join(", ")}`, 400);
+      return sendError(
+        res,
+        `Missing required fields: ${missingFields.join(", ")}`,
+        400
+      );
     }
 
     if (type !== "purchase") {
@@ -46,15 +65,17 @@ const createPurchase = async (req, res) => {
     }
 
     // 🔹 Get supplier
-    const supplierDoc = await SupplierModel.findById(supplier_id).session(session);
+    const supplierDoc = await SupplierModel.findById(supplier_id).session(
+      session
+    );
     if (!supplierDoc) {
       await session.abortTransaction();
       return sendError(res, "Supplier not found", 404);
     }
 
-    // 🔹 Adjust supplier balance: purchases increase receive (credit)
-    const updatedPay = supplierDoc.pay || 0; // debit unchanged
-    const updatedReceive = (supplierDoc.receive || 0) + total; // credit increases by total
+    // 🔹 Adjust supplier balance
+    const updatedPay = supplierDoc.pay || 0;
+    const updatedReceive = (supplierDoc.receive || 0) + (total - paid_amount);
 
     await SupplierModel.findByIdAndUpdate(
       supplier_id,
@@ -62,21 +83,23 @@ const createPurchase = async (req, res) => {
       { session }
     );
 
-    // 🔹 Create new order
-    const newOrder = await Order.create(
-      {
-        invoice_number,
-        supplier_id,
-        subtotal,
-        total,
-        paid_amount,
-        due_amount,
-        net_value,
-        type,
-        status,
-        note,
-        due_date,
-      },
+    // 🔹 Create new order (⚡ FIX: wrap in array)
+    const [newOrder] = await Order.create(
+      [
+        {
+          invoice_number,
+          supplier_id,
+          subtotal,
+          total,
+          paid_amount,
+          due_amount,
+          net_value,
+          type,
+          status,
+          note,
+          due_date,
+        },
+      ],
       { session }
     );
 
@@ -92,24 +115,33 @@ const createPurchase = async (req, res) => {
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
 
-      // Create order item
-      const orderItem = await OrderItem.create(
-        {
-          order_id: newOrder._id,
-          product_id: item.product_id,
-          batch: item.batch,
-          expiry: item.expiry,
-          units: item.units,
-          unit_price: item.unit_price,
-          discount: item.discount || 0,
-          total: item.total,
-        },
+      // 🔹 Parse expiry "MM/YYYY" → Date
+      let expiryDate = null;
+      if (item.expiry) {
+        const [month, year] = item.expiry.split("/"); // "12/2025"
+        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`); // "2025-12-01"
+      }
+
+      // 🔹 Create order item
+      const [orderItem] = await OrderItem.create(
+        [
+          {
+            order_id: newOrder._id,
+            product_id: item.product_id,
+            batch: item.batch,
+            expiry: expiryDate, 
+            units: item.units,
+            unit_price: item.unit_price,
+            discount: item.discount || 0,
+            total: item.total,
+          },
+        ],
         { session }
       );
 
       orderItems.push(orderItem);
 
-      // Prepare batch update
+      // 🔹 Prepare batch update
       batchUpdates.push({
         updateOne: {
           filter: { product_id: item.product_id, batch_number: item.batch },
@@ -118,7 +150,7 @@ const createPurchase = async (req, res) => {
               product_id: item.product_id,
               batch_number: item.batch,
               purchase_price: item.unit_price,
-              expiry_date: item.expiry,
+              expiry_date: expiryDate, 
             },
             $inc: { stock: item.units },
           },
@@ -127,6 +159,7 @@ const createPurchase = async (req, res) => {
       });
     }
 
+
     // Bulk update batches
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
@@ -134,8 +167,12 @@ const createPurchase = async (req, res) => {
 
     await session.commitTransaction();
 
-    return successResponse(res, "Purchase order created successfully", { order: newOrder, items: orderItems }, 201);
-
+    return successResponse(
+      res,
+      "Purchase order created successfully",
+      { order: newOrder, items: orderItems },
+      201
+    );
   } catch (error) {
     await session.abortTransaction();
     console.error("Purchase error:", error);
@@ -144,6 +181,7 @@ const createPurchase = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 // Get all purchases by supplier ID

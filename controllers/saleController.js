@@ -141,6 +141,12 @@ const createSale = async (req, res) => {
         await session.abortTransaction();
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
+      // 🔹 Parse expiry "MM/YYYY" → Date
+      let expiryDate = null;
+      if (item.expiry) {
+        const [month, year] = item.expiry.split("/"); // "12/2025"
+        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`); // "2025-12-01"
+      }
 
       const orderItem = await OrderItem.create(
         [
@@ -148,7 +154,7 @@ const createSale = async (req, res) => {
             order_id: newOrder[0]._id,
             product_id: item.product_id,
             batch: item.batch,
-            expiry: item.expiry,
+            expiry: expiryDate,
             units: item.units,
             unit_price: item.unit_price,
             discount: item.discount || 0,
@@ -191,11 +197,14 @@ const createSale = async (req, res) => {
       return { pay, receive };
     }
 
+    // 🔹 Calculate actual due = total - paid_amount
+    const actualDue = total - paid_amount;
+
     const { pay, receive } = adjustPayReceive(
       supplierDoc.pay || 0,
       supplierDoc.receive || 0,
-      total, // 🔹 sale adds in debit now
-      0      // no credit
+      actualDue,  // use net due here
+      0
     );
 
     await Supplier.findByIdAndUpdate(
