@@ -84,8 +84,8 @@ export const createSupplier = async (req, res) => {
       licence_photo
     } = req.body || {};
 
-    if (!company_name) {
-      return sendError(res, "Company Name is required.");
+    if (!company_name || !city || !role) {
+      return sendError(res, "Company Name, City and Role is required.");
     }
 
 

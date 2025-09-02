@@ -67,7 +67,6 @@ const getAllActiveUsers = async (req, res) => {
 const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id).populate('area_id name');
-    console.log("user", user)
     if (!user) return sendError(res, "User not found");
     successResponse(res, "User fetched", { user });
   } catch (error) {
@@ -158,7 +157,7 @@ export const createUser = async (req, res) => {
 // get Booker
 export const getAllBookers = async (req, res) => {
   try {
-    const bookers = await User.find({ employee_type: "booker" })
+    const bookers = await User.find()
       .select("_id name")
       .sort({ name: 1 });
     return successResponse(res, "Bookers fetched", { bookers });

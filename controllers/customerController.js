@@ -130,8 +130,8 @@ export const createCustomer = async (req, res) => {
       licence_photo
     } = req.body || {};
 
-    if (!company_name) {
-      return sendError(res, "Company Name required field.");
+    if (!company_name || !city || !role) {
+      return sendError(res, "Company Name, City and Role is required.");
     }
 
     //Opening balance will directly become the receive amount

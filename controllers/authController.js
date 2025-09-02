@@ -52,6 +52,7 @@ export const loginUser = async (req, res) => {
         email: user.email,
         role: user.role,
         type: user.type,
+        profile_photo: user.profile_photo || null,
         permissions: userPermissions, // ✅ Include permissions
       },
     });
