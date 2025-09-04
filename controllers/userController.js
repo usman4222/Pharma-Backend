@@ -107,6 +107,12 @@ export const createUser = async (req, res) => {
       return sendError(res, "Name is required", 400);
     }
 
+    // Check if the same area is already assigned to an employee
+    const existingUser = await User.findOne({ area_id, email });
+    if (existingUser) {
+      return sendError(res, "This area is already assigned to this employee", 400);
+    } 
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 

@@ -698,6 +698,59 @@ const getSaleById = async (req, res) => {
 };
 
 
+// Get all sales of a specific booker (employee)
+const getBookerSales = async (req, res) => {
+  try {
+    const { bookerId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Validate booker exists
+    const booker = await User.findById(bookerId);
+    if (!booker) {
+      return sendError(res, "Booker not found", 404);
+    }
+
+    // Count total sales
+    const totalItems = await Order.countDocuments({ booker_id: bookerId, type: "sale" });
+
+    // Fetch paginated sales
+    const sales = await Order.find({ booker_id: bookerId, type: "sale" })
+      .populate("supplier_id", "company_name")
+      .populate("booker_id", "name email")
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Get order items
+    const orderIds = sales.map((s) => s._id);
+    const orderItems = await OrderItem.find({ order_id: { $in: orderIds } })
+      .populate("product_id", "name sku")
+      .lean();
+
+    const salesWithItems = sales.map((sale) => ({
+      ...sale,
+      items: orderItems.filter((item) => item.order_id.toString() === sale._id.toString()),
+    }));
+
+    return successResponse(res, "Booker sales fetched successfully", {
+      sales: salesWithItems,
+      currentPage: page,
+      totalPages: Math.ceil(totalItems / limit),
+      totalItems,
+      pageSize: limit,
+      hasMore: page * limit < totalItems,
+    });
+  } catch (error) {
+    console.error("Get Booker Sales error:", error);
+    return sendError(res, error.message);
+  }
+};
+
+
+
+
 
 const deleteSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -763,6 +816,7 @@ const saleController = {
   getAllSaleReturns,
   returnSaleByInvoice,
   getSaleById,
+  getBookerSales,
   deleteSale
 };
 
