@@ -20,13 +20,11 @@ const createSale = async (req, res) => {
       subtotal,
       total,
       paid_amount,
-      due_amount,
-      net_value,
       due_date,
+      net_value,
       note,
       items,
       type = "sale",
-      status,
     } = req.body;
 
     // 1. Validate required fields
@@ -36,7 +34,6 @@ const createSale = async (req, res) => {
       subtotal,
       total,
       paid_amount,
-      due_amount,
       net_value,
       items,
     };
@@ -48,6 +45,12 @@ const createSale = async (req, res) => {
     if (missingFields.length > 0) {
       await session.abortTransaction();
       return sendError(res, `Missing required fields: ${missingFields.join(", ")}`, 400);
+    }
+
+    // Ensure paid amount is not greater than total
+    if (Number(paid_amount) > Number(total)) {
+      await session.abortTransaction();
+      return sendError(res, "Paid amount cannot be greater than total", 400);
     }
 
     // 2. Validate batch numbers
@@ -105,27 +108,41 @@ const createSale = async (req, res) => {
       }
     }
 
-    // 6. Create order
-    const newOrder = await Order.create(
-      [
-        {
-          invoice_number,
-          supplier_id,
-          booker_id,
-          subtotal,
-          total,
-          paid_amount,
-          due_amount,
-          net_value,
-          note,
-          due_date,
-          type,
-          status,
-        },
-      ],
-      { session }
-    );
+    // 6. Create order with recovery logic
+    const actualDue = total - paid_amount;
 
+    const orderData = {
+      invoice_number,
+      supplier_id,
+      booker_id,
+      subtotal,
+      total,
+      paid_amount,
+      due_amount: actualDue, // always override
+      net_value,
+      note,
+      due_date,
+      type,
+    };
+
+    if (paid_amount >= total) {
+      // fully recovered
+      orderData.status = "recovered";
+      orderData.recovered_amount = paid_amount;
+      orderData.recovered_date = new Date();
+    } else if (paid_amount > 0) {
+      // partial recovery
+      orderData.status = "completed";
+      orderData.recovered_amount = paid_amount;
+      orderData.recovered_date = new Date();
+    } else {
+      // no recovery
+      orderData.status = "completed";
+      orderData.recovered_amount = 0;
+      orderData.recovered_date = null;
+    }
+
+    const newOrder = await Order.create([orderData], { session });
     if (!newOrder?.length) {
       await session.abortTransaction();
       return sendError(res, "Failed to create order", 500);
@@ -141,11 +158,12 @@ const createSale = async (req, res) => {
         await session.abortTransaction();
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
-      // 🔹 Parse expiry "MM/YYYY" → Date
+
+      // Parse expiry "MM/YYYY" → Date
       let expiryDate = null;
       if (item.expiry) {
-        const [month, year] = item.expiry.split("/"); // "12/2025"
-        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`); // "2025-12-01"
+        const [month, year] = item.expiry.split("/");
+        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`);
       }
 
       const orderItem = await OrderItem.create(
@@ -168,10 +186,7 @@ const createSale = async (req, res) => {
 
       batchUpdates.push({
         updateOne: {
-          filter: {
-            product_id: item.product_id,
-            batch_number: item.batch,
-          },
+          filter: { product_id: item.product_id, batch_number: item.batch },
           update: { $inc: { stock: -item.units } },
         },
       });
@@ -181,7 +196,7 @@ const createSale = async (req, res) => {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
-    // 8. Adjust balances (sale increases receive)
+    // 8. Adjust supplier balances
     function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
       let pay = currentPay + addPay;
       let receive = currentReceive + addReceive;
@@ -197,13 +212,10 @@ const createSale = async (req, res) => {
       return { pay, receive };
     }
 
-    // 🔹 Calculate actual due = total - paid_amount
-    const actualDue = total - paid_amount;
-
     const { pay, receive } = adjustPayReceive(
       supplierDoc.pay || 0,
       supplierDoc.receive || 0,
-      actualDue,  // use net due here
+      actualDue, // add net due
       0
     );
 
@@ -229,6 +241,7 @@ const createSale = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 // Get all sales by Customer ID
@@ -279,29 +292,20 @@ const getSalesByCustomer = async (req, res) => {
 const getAllSales = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
     // Get all sale orders with pagination
     const sales = await Order.find({ type: "sale" })
       .populate('supplier_id', 'company_name role')
       .populate('booker_id', 'name')
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
 
     // Get total count for pagination
     const totalSales = await Order.countDocuments({ type: "sale" });
-    const totalPages = Math.ceil(totalSales / limit);
-    const hasMore = page < totalPages;
 
     return successResponse(res, "Sale orders fetched successfully", {
       sales,
       currentPage: page,
-      totalPages,
       totalItems: totalSales,
-      pageSize: limit,
-      hasMore
     });
 
   } catch (error) {
@@ -702,25 +706,24 @@ const getSaleById = async (req, res) => {
 const getBookerSales = async (req, res) => {
   try {
     const { bookerId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
-    // Validate booker exists
+    // ✅ Validate booker exists
     const booker = await User.findById(bookerId);
     if (!booker) {
       return sendError(res, "Booker not found", 404);
     }
 
     // Count total sales
-    const totalItems = await Order.countDocuments({ booker_id: bookerId, type: "sale" });
+    const totalItems = await Order.countDocuments({
+      booker_id: bookerId,
+      type: "sale",
+    });
 
-    // Fetch paginated sales
+    // ✅ Fetch all sales for this booker
     const sales = await Order.find({ booker_id: bookerId, type: "sale" })
       .populate("supplier_id", "company_name")
       .populate("booker_id", "name email")
-      .skip(skip)
-      .limit(limit)
+      .sort({ createdAt: -1 })
       .lean();
 
     // Get order items
@@ -729,18 +732,17 @@ const getBookerSales = async (req, res) => {
       .populate("product_id", "name sku")
       .lean();
 
+    // Attach items
     const salesWithItems = sales.map((sale) => ({
       ...sale,
-      items: orderItems.filter((item) => item.order_id.toString() === sale._id.toString()),
+      items: orderItems.filter(
+        (item) => item.order_id.toString() === sale._id.toString()
+      ),
     }));
 
     return successResponse(res, "Booker sales fetched successfully", {
       sales: salesWithItems,
-      currentPage: page,
-      totalPages: Math.ceil(totalItems / limit),
       totalItems,
-      pageSize: limit,
-      hasMore: page * limit < totalItems,
     });
   } catch (error) {
     console.error("Get Booker Sales error:", error);
@@ -749,6 +751,122 @@ const getBookerSales = async (req, res) => {
 };
 
 
+
+// ✅ Add Recovery Controller
+export const addRecover = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderId } = req.params;
+    const { recovery_amount, recovery_date } = req.body;
+
+    if (!recovery_amount || recovery_amount <= 0) {
+      return sendError(res, "Recovery amount must be greater than zero", 400);
+    }
+
+    // 🔹 Find the order
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      return sendError(res, "Order not found", 404);
+    }
+
+    if (order.due_amount < recovery_amount) {
+      await session.abortTransaction();
+      return sendError(res, "Recovery amount cannot be greater than due amount", 400);
+    }
+
+    // 🔹 Find supplier
+    const supplier = await Supplier.findById(order.supplier_id).session(session);
+    if (!supplier) {
+      await session.abortTransaction();
+      return sendError(res, "Supplier not found", 404);
+    }
+
+    // 🔹 Update Order's due_amount and recovered fields
+    order.due_amount = Number((order.due_amount - recovery_amount).toFixed(2));
+    order.recovered_amount += recovery_amount;
+    order.recovered_date = recovery_date || new Date();
+
+    if (order.due_amount <= 0) {
+      order.due_amount = 0;
+      order.status = "recovered";
+    }
+
+
+    await order.save({ session });
+
+    // 🔹 Update Supplier's debit (pay)
+    supplier.pay = (supplier.pay || 0) - recovery_amount;
+    if (supplier.pay < 0) supplier.pay = 0; // safety check
+    await supplier.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return successResponse(res, "Recovery added successfully", {
+      sale: order,
+      supplier,
+      recovery: {
+        recovery_amount,
+        recovery_date: recovery_date || new Date(),
+      },
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    return sendError(res, "Failed to add recovery", error);
+  }
+};
+
+
+// Get all sales with pagination (only with valid booker_id)
+const getAllBookersSales = async (req, res) => {
+  try {
+    // ✅ Only sales that must have a booker_id
+    const filter = {
+      type: "sale",
+      booker_id: { $exists: true, $ne: null },
+    };
+
+    // Count total sales with valid booker_id
+    const totalItems = await Order.countDocuments(filter);
+
+    // Fetch sales with supplier + booker populated
+    const sales = await Order.find(filter)
+      .populate("supplier_id", "company_name")
+      .populate("booker_id", "name email") // ensures booker exists
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // 🚨 Filter out records where booker_id failed to populate (invalid user)
+    const validSales = sales.filter((s) => s.booker_id && s.booker_id._id);
+
+    // Get order items
+    const orderIds = validSales.map((s) => s._id);
+    const orderItems = await OrderItem.find({ order_id: { $in: orderIds } })
+      .populate("product_id", "name sku")
+      .lean();
+
+    // Attach items to their corresponding sales
+    const salesWithItems = validSales.map((sale) => ({
+      ...sale,
+      items: orderItems.filter(
+        (item) => item.order_id.toString() === sale._id.toString()
+      ),
+    }));
+
+    return successResponse(res, "All Bookers Sales fetched successfully", {
+      sales: salesWithItems,
+      totalItems,
+    });
+  } catch (error) {
+    console.error("Get All Sales error:", error);
+    return sendError(res, error.message);
+  }
+};
 
 
 
@@ -810,6 +928,7 @@ const deleteSale = async (req, res) => {
 const saleController = {
   createSale,
   getAllSales,
+  addRecover,
   getSalesByCustomer,
   getProductSales,
   getSaleForReturn,
@@ -817,6 +936,7 @@ const saleController = {
   returnSaleByInvoice,
   getSaleById,
   getBookerSales,
+  getAllBookersSales,
   deleteSale
 };
 

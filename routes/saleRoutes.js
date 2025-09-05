@@ -11,8 +11,10 @@ router.delete("/:orderId", saleController.deleteSale);
 router.get("/return/search", saleController.getSaleForReturn);
 router.post("/return", saleController.returnSaleByInvoice); 
 router.get("/sale-return", saleController.getAllSaleReturns);
-router.get("/booker-sales/:bookerId", saleController.getBookerSales);
+router.get("/booker-sales/:bookerId", saleController.getBookerSales);  
 router.get("/get-sale/:orderId", saleController.getSaleById);
+router.get("/all-bookers-sales", saleController.getAllBookersSales); 
+router.put("/add-recover/:orderId", saleController.addRecover); 
 router.get("/:customerId", saleController.getSalesByCustomer);
 
 export default router;

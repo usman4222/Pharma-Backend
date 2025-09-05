@@ -12,6 +12,8 @@ const orderSchema = new mongoose.Schema(
     due_date: { type: Date, default: null },
     estimate_customer_name: { type: String, default: "" },
     net_value: { type: Number, required: true },
+    recovered_amount: { type: Number, default: 0 },
+    recovered_date: { type: Date, default: null },
     note: { type: String },
     type: {
       type: String,
@@ -20,7 +22,7 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["completed", "skipped", "returned"],
+      enum: ["completed", "skipped", "returned", "recovered"],
       default: "completed",
     },
   },

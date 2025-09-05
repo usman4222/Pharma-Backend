@@ -228,15 +228,12 @@ const getPurchasesBySupplier = async (req, res) => {
 const getAllPurchases = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+
 
     // Fetch purchases with supplier and items populated
     const purchases = await Order.find({ type: "purchase" })
       .populate("supplier_id", "company_name role") // supplier info
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
       .lean(); // convert to plain JS objects for easier modification
 
     // Fetch OrderItems and attach product details
@@ -256,16 +253,11 @@ const getAllPurchases = async (req, res) => {
 
     // Get total count for pagination
     const totalPurchases = await Order.countDocuments({ type: "purchase" });
-    const totalPages = Math.ceil(totalPurchases / limit);
-    const hasMore = page < totalPages;
 
     return successResponse(res, "Purchase orders fetched successfully", {
       purchases: purchasesWithItems,
       currentPage: page,
-      totalPages,
       totalItems: totalPurchases,
-      pageSize: limit,
-      hasMore,
     });
   } catch (error) {
     console.error("Get all purchase orders error:", error);
