@@ -7,6 +7,8 @@ import { User } from "../models/userModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 import mongoose from "mongoose";
 import adjustBalance from "../utils/adjustBalance.js";
+import Investor from "../models/investorModel.js";
+import investorProfit from "../models/investorProfit.js";
 
 const createSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -225,12 +227,63 @@ const createSale = async (req, res) => {
       { session }
     );
 
+
+    // 9. Investor Profit Sharing (→ InvestorProfit table)
+    const grossSale = total;
+    const expense = grossSale * 0.02;
+    const charity = grossSale * 0.10;
+    const distributable = grossSale - (expense + charity);
+
+    const investors = await Investor.find({ status: "active" }).session(session);
+    const today = new Date();
+    const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+
+    for (const inv of investors) {
+      const joinDate = new Date(inv.join_date);
+      let eligible = false;
+    
+      if (joinDate <= new Date(today.getFullYear(), today.getMonth(), 1)) {
+        eligible = true;
+      } else if (
+        joinDate.getDate() <= 15 &&
+        joinDate.getMonth() === today.getMonth() &&
+        joinDate.getFullYear() === today.getFullYear()
+      ) {
+        eligible = today.getDate() >= 15;
+      }
+    
+      if (!eligible) continue;
+    
+      const invShare = (distributable * inv.profit_percentage) / 100;
+      const ownerShare = distributable - invShare;
+    
+      await investorProfit.create(
+        [
+          {
+            investor_id: inv._id,
+            month: monthKey,
+            order_id: newOrder[0]._id,
+            sales: grossSale,
+            gross_profit: grossSale,
+            expense,
+            charity,
+            net_profit: distributable,
+            investor_share: invShare,
+            owner_share: ownerShare,
+            total: grossSale,
+          }
+        ],
+        { session }
+      );
+    }
+    
+
     await session.commitTransaction();
 
     return successResponse(
       res,
       "Sale order created successfully",
-      { order: newOrder[0], items: orderItems },
+      { order: newOrder[0], items: orderItems, distributable },
       201
     );
   } catch (error) {
