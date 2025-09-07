@@ -10,6 +10,9 @@ router.post("/", investorController.addInvestor);
 // ✅ Add new Investment 
 router.put("/new-investment/:id", investorController.addInvestment);
 
+// ✅ Update specific investment in amount_invested array
+router.put("/:investorId/investment/:investmentId", investorController.updateInvestment);
+
 // ✅ Get all investors with summary
 router.get("/", investorController.getInvestors);
 
@@ -19,10 +22,20 @@ router.get("/:id", investorController.getInvestorById);
 // ✅ Update investor
 router.put("/:id", investorController.editInvestor);
 
-// ✅ Add debit/credit transaction for investor
-router.post("/:id/transaction", investorController.addDebitCredit);
+// ✅ Add debit/credit transaction for investor 
+router.post("/:id/transaction", investorController.addInvestorLedger);
 
-// ❌ Delete investor (optional — uncomment if needed later)
-// router.delete("/:id", tokenValidation, investorController.deleteInvestor);
+// ✅ Edit debit/credit transaction for investor 
+router.put("/:id/transaction/:entryId", investorController.editInvestorLedger);
+
+// Get transactions
+router.get("/:id/transactions", investorController.getInvestorTransactions);
+
+// Get Single transactions
+router.get("/:id/transactions/:transactionId", investorController.getInvestorTransactionById);
+
+// Delete ledger entry
+router.delete("/:id/transaction/:entryId", investorController.deleteInvestorLedger);
+
 
 export default router;

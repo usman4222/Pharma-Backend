@@ -228,7 +228,7 @@ const createSale = async (req, res) => {
     );
 
 
-    // 9. Investor Profit Sharing (→ InvestorProfit table)
+    // 9. Investor Profit Sharing (→ InvestorProfit table + update credit balance)
     const grossSale = total;
     const expense = grossSale * 0.02;
     const charity = grossSale * 0.10;
@@ -241,7 +241,7 @@ const createSale = async (req, res) => {
     for (const inv of investors) {
       const joinDate = new Date(inv.join_date);
       let eligible = false;
-    
+
       if (joinDate <= new Date(today.getFullYear(), today.getMonth(), 1)) {
         eligible = true;
       } else if (
@@ -251,12 +251,13 @@ const createSale = async (req, res) => {
       ) {
         eligible = today.getDate() >= 15;
       }
-    
+
       if (!eligible) continue;
-    
+
       const invShare = (distributable * inv.profit_percentage) / 100;
       const ownerShare = distributable - invShare;
-    
+
+      // ✅ 1. Save to InvestorProfit table
       await investorProfit.create(
         [
           {
@@ -275,8 +276,13 @@ const createSale = async (req, res) => {
         ],
         { session }
       );
+
+      // ✅ 2. Update only credit balance (no push in debit_credit)
+      inv.credit = (inv.credit || 0) + invShare;
+      console.log(`Investor ${inv.name} new credit:`, inv.credit);
+
+      await inv.save({ session });
     }
-    
 
     await session.commitTransaction();
 

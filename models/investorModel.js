@@ -35,7 +35,15 @@ const investorSchema = new mongoose.Schema({
       note: String,
       date: { type: Date, default: Date.now },
     }
-  ]
+  ],
+  debit: {
+    type: Number,
+    default: 0,
+  },
+  credit: {
+    type: Number,
+    default: 0,
+  },
 }, { timestamps: true });
 
 export default mongoose.model("Investor", investorSchema);
