@@ -351,20 +351,76 @@ const getSalesByCustomer = async (req, res) => {
 const getAllSales = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
 
-    // Get all sale orders with pagination
+    // Fetch sales with supplier and booker populated
     const sales = await Order.find({ type: "sale" })
       .populate('supplier_id', 'company_name role')
       .populate('booker_id', 'name')
       .sort({ createdAt: -1 })
+      .lean();
 
-    // Get total count for pagination
-    const totalSales = await Order.countDocuments({ type: "sale" });
+    // Fetch OrderItems and attach product details
+    const saleIds = sales.map((order) => order._id);
+    const orderItems = await OrderItem.find({ order_id: { $in: saleIds } })
+      .populate("product_id", "name category unit")
+      .lean();
+
+    const salesWithItems = sales.map((order) => {
+      const items = orderItems.filter(
+        (item) => item.order_id.toString() === order._id.toString()
+      );
+      return { ...order, items };
+    });
+
+    // Calculate totals for today, weekly, monthly, yearly
+    const now = new Date();
+    let todayTotal = 0,
+      weeklyTotal = 0,
+      monthlyTotal = 0,
+      yearlyTotal = 0;
+
+    // Set week start (Sunday 00:00:00) and week end (Saturday 23:59:59)
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    sales.forEach((s) => {
+      const date = new Date(s.createdAt);
+      const total = s.total || 0;
+
+      // Today
+      if (date.toDateString() === now.toDateString()) todayTotal += total;
+
+      // Weekly
+      if (date >= weekStart && date <= weekEnd) weeklyTotal += total;
+
+      // Monthly
+      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth())
+        monthlyTotal += total;
+
+      // Yearly
+      if (date.getFullYear() === now.getFullYear()) yearlyTotal += total;
+    });
+
+    // Pagination
+    const totalItems = sales.length;
+    const paginatedSales = salesWithItems.slice((page - 1) * limit, page * limit);
 
     return successResponse(res, "Sale orders fetched successfully", {
-      sales,
+      sales: paginatedSales,
+      totals: {
+        today: todayTotal,
+        weekly: weeklyTotal,
+        monthly: monthlyTotal,
+        yearly: yearlyTotal,
+      },
       currentPage: page,
-      totalItems: totalSales,
+      totalItems,
     });
 
   } catch (error) {
@@ -678,51 +734,76 @@ const returnSaleByInvoice = async (req, res) => {
 };
 
 
-// GET all sale returns with their items
+// GET all sale returns with their items and totals
 export const getAllSaleReturns = async (req, res) => {
-
   try {
-    const { page = 1, limit = 10 } = req.query;
-
-    // Fetch sale returns with pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
+    // Fetch all sale return orders
     const returns = await Order.find({ type: "sale_return" })
       .populate("supplier_id", "_id company_name role")
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const totalItems = await Order.countDocuments({ type: "sale_return" });
-    const totalPages = Math.ceil(totalItems / parseInt(limit));
+      .lean();
 
     // Populate items for each return order
-    const returnsWithItems = await Promise.all(
-      returns.map(async (ret) => {
-        const items = await OrderItem.find({ order_id: ret._id }).populate(
-          "product_id",
-          "_id name"
-        );
-        return {
-          ...ret.toObject(),
-          items,
-        };
-      })
-    );
+    const returnIds = returns.map((ret) => ret._id);
+    const returnItems = await OrderItem.find({ order_id: { $in: returnIds } })
+      .populate("product_id", "_id name")
+      .lean();
+
+    const returnsWithItems = returns.map((ret) => {
+      const items = returnItems.filter(
+        (item) => item.order_id.toString() === ret._id.toString()
+      );
+      return { ...ret, items };
+    });
+
+    // Calculate totals: today, weekly, monthly, yearly
+    const now = new Date();
+    let todayTotal = 0,
+      weeklyTotal = 0,
+      monthlyTotal = 0,
+      yearlyTotal = 0;
+
+    returns.forEach((ret) => {
+      const date = new Date(ret.createdAt);
+      const total = ret.total || 0;
+
+      // Today
+      if (date.toDateString() === now.toDateString()) todayTotal += total;
+
+      // Weekly (Sunday → Saturday)
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      if (date >= weekStart && date <= weekEnd) weeklyTotal += total;
+
+      // Monthly
+      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth())
+        monthlyTotal += total;
+
+      // Yearly
+      if (date.getFullYear() === now.getFullYear()) yearlyTotal += total;
+    });
 
     return successResponse(res, "Sale returns fetched successfully", {
       returns: returnsWithItems,
-      currentPage: parseInt(page),
-      totalPages,
-      totalItems,
-      pageSize: parseInt(limit),
-      hasMore: parseInt(page) < totalPages,
+      totals: {
+        today: todayTotal,
+        weekly: weeklyTotal,
+        monthly: monthlyTotal,
+        yearly: yearlyTotal,
+      },
+      totalItems: returns.length,
     });
   } catch (error) {
     console.error("Error fetching sale returns:", error);
     return sendError(res, "Failed to fetch sale returns");
   }
 };
+
+
 // Get sale by ID
 const getSaleById = async (req, res) => {
   try {
@@ -895,7 +976,7 @@ const getAllBookersSales = async (req, res) => {
 
     // Fetch sales with supplier + booker populated
     const sales = await Order.find(filter)
-      .populate("supplier_id", "company_name")
+      .populate("supplier_id", "company_name receive pay")
       .populate("booker_id", "name email") // ensures booker exists
       .sort({ createdAt: -1 })
       .lean();

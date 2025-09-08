@@ -2,30 +2,75 @@ import mongoose from "mongoose";
 import { SupplierModel } from "../models/supplierModel.js";
 import { sendError, successResponse } from "../utils/response.js";
 
-// Fetch paginated customer list
 export const getAllCustomers = async (req, res) => {
   try {
     const filter = {
       $or: [{ role: "customer" }, { role: "both" }],
     };
 
-    // Fetch all matching customers 
-    const customers = await SupplierModel.find(filter)
+    // Fetch all matching customers
+    const customers = await SupplierModel.find(filter) // assuming SupplierModel holds customers too
       .populate('area_id', 'name city description')
-      .populate('booker_id', 'name');
+      .populate('booker_id', 'name')
+      .lean();
 
-    // Total count of customers (optional, just for info)
-    const totalCustomers = customers.length;
+    const now = new Date();
+
+    // Initialize totals
+    let totals = {
+      today: { debit: 0, credit: 0 },
+      weekly: { debit: 0, credit: 0 },
+      monthly: { debit: 0, credit: 0 },
+      yearly: { debit: 0, credit: 0 },
+    };
+
+    customers.forEach((customer) => {
+      const balanceDate = customer.updatedAt ? new Date(customer.updatedAt) : new Date();
+      const debit = customer.receive || 0; // customer debit (amount they owe you)
+      const credit = customer.pay || 0; // customer credit (amount you owe them)
+
+      // Today
+      if (balanceDate.toDateString() === now.toDateString()) {
+        totals.today.debit += debit;
+        totals.today.credit += credit;
+      }
+
+      // Weekly
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      if (balanceDate >= weekStart && balanceDate <= weekEnd) {
+        totals.weekly.debit += debit;
+        totals.weekly.credit += credit;
+      }
+
+      // Monthly
+      if (balanceDate.getFullYear() === now.getFullYear() && balanceDate.getMonth() === now.getMonth()) {
+        totals.monthly.debit += debit;
+        totals.monthly.credit += credit;
+      }
+
+      // Yearly
+      if (balanceDate.getFullYear() === now.getFullYear()) {
+        totals.yearly.debit += debit;
+        totals.yearly.credit += credit;
+      }
+    });
 
     return successResponse(res, "Customers fetched successfully", {
       customers,
-      totalItems: totalCustomers,
+      totals,
+      totalItems: customers.length,
     });
   } catch (error) {
     console.error("Fetch Customers Error:", error);
     return sendError(res, "Failed to fetch customers", 500);
   }
 };
+
 
 export const getAllActiveCustomers = async (req, res) => {
   try {

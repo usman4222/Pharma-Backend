@@ -7,20 +7,68 @@ export const getAllSuppliers = async (req, res) => {
       $or: [{ role: "supplier" }, { role: "both" }],
     };
 
-    // Get all suppliers ()
-    const suppliers = await SupplierModel.find(filter).populate('area_id', 'name city description');
+    // Get all suppliers
+    const suppliers = await SupplierModel.find(filter)
+      .populate('area_id', 'name city description')
+      .lean();
 
-    const totalSuppliers = suppliers.length;
+    const now = new Date();
+
+    // Initialize totals
+    let totals = {
+      today: { debit: 0, credit: 0 },
+      weekly: { debit: 0, credit: 0 },
+      monthly: { debit: 0, credit: 0 },
+      yearly: { debit: 0, credit: 0 },
+    };
+
+    suppliers.forEach((supplier) => {
+      const balanceDate = supplier.updatedAt ? new Date(supplier.updatedAt) : new Date();
+      const debit = supplier.pay || 0; // assuming 'pay' is debit
+      const credit = supplier.receive || 0; // assuming 'receive' is credit
+
+      // Today
+      if (balanceDate.toDateString() === now.toDateString()) {
+        totals.today.debit += debit;
+        totals.today.credit += credit;
+      }
+
+      // Weekly
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      if (balanceDate >= weekStart && balanceDate <= weekEnd) {
+        totals.weekly.debit += debit;
+        totals.weekly.credit += credit;
+      }
+
+      // Monthly
+      if (balanceDate.getFullYear() === now.getFullYear() && balanceDate.getMonth() === now.getMonth()) {
+        totals.monthly.debit += debit;
+        totals.monthly.credit += credit;
+      }
+
+      // Yearly
+      if (balanceDate.getFullYear() === now.getFullYear()) {
+        totals.yearly.debit += debit;
+        totals.yearly.credit += credit;
+      }
+    });
 
     return successResponse(res, "Suppliers fetched successfully", {
       suppliers,
-      totalItems: totalSuppliers,
+      totals,
+      totalItems: suppliers.length,
     });
   } catch (error) {
     console.error("Fetch Suppliers Error:", error);
     return sendError(res, "Failed to fetch suppliers", 500);
   }
 };
+
 
 
 
