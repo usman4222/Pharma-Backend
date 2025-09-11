@@ -15,6 +15,7 @@ const orderSchema = new mongoose.Schema(
     recovered_amount: { type: Number, default: 0 },
     recovered_date: { type: Date, default: null },
     note: { type: String },
+    profit: { type: Number, default: 0 },
     type: {
       type: String,
       enum: ["purchase", "sale", "estimated", "purchase_return", "sale_return"],

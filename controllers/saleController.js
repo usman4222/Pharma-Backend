@@ -29,6 +29,8 @@ const createSale = async (req, res) => {
       type = "sale",
     } = req.body;
 
+    console.log("req.body", req.body)
+
     // 1. Validate required fields
     const requiredFields = {
       invoice_number,
@@ -120,25 +122,23 @@ const createSale = async (req, res) => {
       subtotal,
       total,
       paid_amount,
-      due_amount: actualDue, // always override
+      due_amount: actualDue,
       net_value,
       note,
       due_date,
       type,
+      profit: 0,
     };
 
     if (paid_amount >= total) {
-      // fully recovered
       orderData.status = "recovered";
       orderData.recovered_amount = paid_amount;
       orderData.recovered_date = new Date();
     } else if (paid_amount > 0) {
-      // partial recovery
       orderData.status = "completed";
       orderData.recovered_amount = paid_amount;
       orderData.recovered_date = new Date();
     } else {
-      // no recovery
       orderData.status = "completed";
       orderData.recovered_amount = 0;
       orderData.recovered_date = null;
@@ -150,23 +150,52 @@ const createSale = async (req, res) => {
       return sendError(res, "Failed to create order", 500);
     }
 
-    // 7. Order items + batch updates
+    // 7. Order items + batch updates + profit calculation
     const orderItems = [];
     const batchUpdates = [];
+    let totalOrderProfit = 0;
 
     for (const item of items) {
+      console.log("item", item)
       const product = await Product.findById(item.product_id).session(session);
       if (!product) {
         await session.abortTransaction();
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
 
-      // Parse expiry "MM/YYYY" → Date
-      let expiryDate = null;
-      if (item.expiry) {
-        const [month, year] = item.expiry.split("/");
-        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`);
+      const batch = await Batch.findOne({
+        product_id: item.product_id,
+        batch_number: item.batch,
+      }).session(session);
+
+      if (!batch) {
+        await session.abortTransaction();
+        return sendError(res, `Batch ${item.batch} not found`, 404);
       }
+
+      // ✅ CORRECT PROFIT CALCULATION (using pre-tax amount)
+      const salePricePerUnitIncludingTax = item.total / item.units;
+      const profitPerUnit = salePricePerUnitIncludingTax - batch.unit_cost;
+      const totalProfitForItem = profitPerUnit * item.units;
+
+      totalOrderProfit += totalProfitForItem;
+
+      // Debug logging
+      // console.log('Profit Calculation Debug:');
+      // console.log('Item total:', item.total);
+      // console.log('Item units:', item.units);
+      // console.log('Item unit_price:', item.unit_price);
+      // console.log('Item discount:', item.discount);
+      // console.log('Batch unit_cost:', batch.unit_cost);
+      // console.log('Profit per unit:', profitPerUnit);
+      // console.log('Total profit for item:', totalProfitForItem);
+
+      let expiryValue = null;
+      if (item.expiry) {
+        expiryValue = item.expiry;
+      }
+
+      const calculatedTotal = item.units * item.unit_price - (item.discount || 0);
 
       const orderItem = await OrderItem.create(
         [
@@ -174,11 +203,13 @@ const createSale = async (req, res) => {
             order_id: newOrder[0]._id,
             product_id: item.product_id,
             batch: item.batch,
-            expiry: expiryDate,
+            expiry: expiryValue,
             units: item.units,
             unit_price: item.unit_price,
             discount: item.discount || 0,
             total: item.total,
+            profit: totalProfitForItem,
+            total: calculatedTotal,
           },
         ],
         { session }
@@ -194,9 +225,17 @@ const createSale = async (req, res) => {
       });
     }
 
+
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
+
+    // Update order with total profit calculation
+    await Order.findByIdAndUpdate(
+      newOrder[0]._id,
+      { profit: totalOrderProfit },
+      { session }
+    );
 
     // 8. Adjust supplier balances
     function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
@@ -217,7 +256,7 @@ const createSale = async (req, res) => {
     const { pay, receive } = adjustPayReceive(
       supplierDoc.pay || 0,
       supplierDoc.receive || 0,
-      actualDue, // add net due
+      actualDue,
       0
     );
 
@@ -227,12 +266,14 @@ const createSale = async (req, res) => {
       { session }
     );
 
+    // 9. Investor Profit Sharing
+    // 9. Investor Profit Sharing
+    const grossSale = total; // total sale amount
+    const expense = grossSale * 0.02; // 2% of sales
 
-    // 9. Investor Profit Sharing (→ InvestorProfit table + update credit balance)
-    const grossSale = total;
-    const expense = grossSale * 0.02;
-    const charity = grossSale * 0.10;
-    const distributable = grossSale - (expense + charity);
+    const profit = totalOrderProfit; // total profit calculated from items
+    const charity = profit * 0.10;   // 10% of profit, not sale
+    const distributable = profit - charity - expense; // distributable profit to investors and owner
 
     const investors = await Investor.find({ status: "active" }).session(session);
     const today = new Date();
@@ -257,7 +298,6 @@ const createSale = async (req, res) => {
       const invShare = (distributable * inv.profit_percentage) / 100;
       const ownerShare = distributable - invShare;
 
-      // ✅ 1. Save to InvestorProfit table
       await investorProfit.create(
         [
           {
@@ -265,7 +305,7 @@ const createSale = async (req, res) => {
             month: monthKey,
             order_id: newOrder[0]._id,
             sales: grossSale,
-            gross_profit: grossSale,
+            gross_profit: profit,
             expense,
             charity,
             net_profit: distributable,
@@ -277,10 +317,7 @@ const createSale = async (req, res) => {
         { session }
       );
 
-      // ✅ 2. Update only credit balance (no push in debit_credit)
       inv.credit = (inv.credit || 0) + invShare;
-      console.log(`Investor ${inv.name} new credit:`, inv.credit);
-
       await inv.save({ session });
     }
 
@@ -289,7 +326,12 @@ const createSale = async (req, res) => {
     return successResponse(
       res,
       "Sale order created successfully",
-      { order: newOrder[0], items: orderItems, distributable },
+      {
+        order: newOrder[0],
+        items: orderItems,
+        distributable,
+        total_profit: totalOrderProfit
+      },
       201
     );
   } catch (error) {
@@ -350,9 +392,6 @@ const getSalesByCustomer = async (req, res) => {
 // Get all sales by type (sale)
 const getAllSales = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-
     // Fetch sales with supplier and booker populated
     const sales = await Order.find({ type: "sale" })
       .populate('supplier_id', 'company_name role')
@@ -373,14 +412,16 @@ const getAllSales = async (req, res) => {
       return { ...order, items };
     });
 
-    // Calculate totals for today, weekly, monthly, yearly
+    // Initialize totals
     const now = new Date();
-    let todayTotal = 0,
-      weeklyTotal = 0,
-      monthlyTotal = 0,
-      yearlyTotal = 0;
+    let totals = {
+      today: { total: 0, profit: 0, expense: 0 },
+      weekly: { total: 0, profit: 0, expense: 0 },
+      monthly: { total: 0, profit: 0, expense: 0 },
+      yearly: { total: 0, profit: 0, expense: 0 },
+    };
 
-    // Set week start (Sunday 00:00:00) and week end (Saturday 23:59:59)
+    // Week start/end
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
@@ -389,37 +430,47 @@ const getAllSales = async (req, res) => {
     weekEnd.setDate(weekStart.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
 
+    // Accumulate totals, profits, and expenses
     sales.forEach((s) => {
       const date = new Date(s.createdAt);
       const total = s.total || 0;
+      const profit = s.profit || 0;
+      const expense = total * 0.02; // 2% of total sale
 
       // Today
-      if (date.toDateString() === now.toDateString()) todayTotal += total;
+      if (date.toDateString() === now.toDateString()) {
+        totals.today.total += total;
+        totals.today.profit += profit;
+        totals.today.expense += expense;
+      }
 
       // Weekly
-      if (date >= weekStart && date <= weekEnd) weeklyTotal += total;
+      if (date >= weekStart && date <= weekEnd) {
+        totals.weekly.total += total;
+        totals.weekly.profit += profit;
+        totals.weekly.expense += expense;
+      }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth())
-        monthlyTotal += total;
+      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+        totals.monthly.total += total;
+        totals.monthly.profit += profit;
+        totals.monthly.expense += expense;
+      }
 
       // Yearly
-      if (date.getFullYear() === now.getFullYear()) yearlyTotal += total;
+      if (date.getFullYear() === now.getFullYear()) {
+        totals.yearly.total += total;
+        totals.yearly.profit += profit;
+        totals.yearly.expense += expense;
+      }
     });
 
-    // Pagination
-    const totalItems = sales.length;
-    const paginatedSales = salesWithItems.slice((page - 1) * limit, page * limit);
+    const totalItems = salesWithItems.length;
 
     return successResponse(res, "Sale orders fetched successfully", {
-      sales: paginatedSales,
-      totals: {
-        today: todayTotal,
-        weekly: weeklyTotal,
-        monthly: monthlyTotal,
-        yearly: yearlyTotal,
-      },
-      currentPage: page,
+      sales: salesWithItems,
+      totals,
       totalItems,
     });
 
@@ -428,6 +479,10 @@ const getAllSales = async (req, res) => {
     return sendError(res, "Failed to fetch sales orders");
   }
 };
+
+
+
+
 
 
 // Get all sales for a specific product

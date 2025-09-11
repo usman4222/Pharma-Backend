@@ -273,6 +273,8 @@ export const getAllProducts = async (req, res) => {
               in: {
                 batch_number: "$$batch.batch_number",
                 expiry_date: "$$batch.expiry_date",
+                discount_per_unit: "$$batch.discount_per_unit",
+                unit_cost: "$$batch.unit_cost",
                 stock: "$$batch.stock"
               }
             }

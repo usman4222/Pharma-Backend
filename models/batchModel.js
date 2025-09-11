@@ -1,26 +1,34 @@
 import mongoose from "mongoose";
 
 const batchSchema = new mongoose.Schema({
-  product_id: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Product', 
-    required: true 
+  product_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
   },
-  batch_number: { 
-    type: String, 
-    required: true 
+  batch_number: {
+    type: String,
+    required: true
   },
-  purchase_price: { 
-    type: Number, 
-    required: true 
+  purchase_price: {
+    type: Number,
+    required: true
   },
-  stock: { 
-    type: Number, 
-    default: 0 
+  stock: {
+    type: Number,
+    default: 0
   },
-  expiry_date: { 
-    type: Date, 
-    required: true 
+  unit_cost: {
+    type: Number,
+    default: 0
+  },
+  discount_per_unit: {
+    type: Number,
+    default: 0
+  },
+  expiry_date: {
+    type: String,
+    required: true
   },
 }, { timestamps: true });
 

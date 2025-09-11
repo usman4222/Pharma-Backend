@@ -249,6 +249,57 @@ export const searchSuppliers = async (req, res) => {
   }
 };
 
+export const addSupplierBalance = async (req, res) => {
+  try {
+    const { supplierId, balanceType, amount } = req.body;
+
+    if (!supplierId || !balanceType || typeof amount !== "number") {
+      return sendError(res, "supplierId, balanceType, and amount are required", 400);
+    }
+
+    const supplier = await SupplierModel.findById(supplierId);
+    if (!supplier) return sendError(res, "Supplier not found", 404);
+
+    if (balanceType === "pay") {
+      if (supplier.receive > 0) {
+        if (amount >= supplier.receive) {
+          // Cancel receive fully, leftover goes to pay
+          supplier.pay += amount - supplier.receive;
+          supplier.receive = 0;
+        } else {
+          // Reduce receive only
+          supplier.receive -= amount;
+        }
+      } else {
+        supplier.pay += amount;
+      }
+    } else if (balanceType === "receive") {
+      if (supplier.pay > 0) {
+        if (amount >= supplier.pay) {
+          // Cancel pay fully, leftover goes to receive
+          supplier.receive += amount - supplier.pay;
+          supplier.pay = 0;
+        } else {
+          // Reduce pay only
+          supplier.pay -= amount;
+        }
+      } else {
+        supplier.receive += amount;
+      }
+    } else {
+      return sendError(res, "balanceType must be either 'pay' or 'receive'", 400);
+    }
+
+    await supplier.save();
+
+    return successResponse(res, "Balance updated successfully", { supplier });
+  } catch (error) {
+    console.error("Add Supplier Balance Error:", error);
+    return sendError(res, "Failed to update supplier balance", 500);
+  }
+};
+
+
 const supplierController = {
   getAllSuppliers,
   getSupplierById,
@@ -258,6 +309,7 @@ const supplierController = {
   deleteSupplier,
   searchSuppliers,
   toggleSupplierStatus,
+  addSupplierBalance
 };
 
 export default supplierController;

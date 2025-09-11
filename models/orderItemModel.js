@@ -19,7 +19,7 @@ const orderItemSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    expiry: { type: Date, default: null }, 
+    expiry: { type: String, default: null },
     units: {
       type: Number,
       required: true,
@@ -32,6 +32,7 @@ const orderItemSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    profit: { type: Number, default: 0 },
     total: {
       type: Number,
       required: true,

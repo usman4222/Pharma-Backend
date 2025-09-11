@@ -115,12 +115,12 @@ const createPurchase = async (req, res) => {
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
 
-      // 🔹 Parse expiry "MM/YYYY" → Date
-      let expiryDate = null;
+      // 🔹 Handle expiry as plain string
+      let expiryValue = null;
       if (item.expiry) {
-        const [month, year] = item.expiry.split("/"); // "12/2025"
-        expiryDate = new Date(`${year}-${month.padStart(2, "0")}-01`); // "2025-12-01"
+        expiryValue = item.expiry; // keep string as-is ("MM/YY" or "MM/YYYY")
       }
+
 
       // 🔹 Create order item
       const [orderItem] = await OrderItem.create(
@@ -129,7 +129,7 @@ const createPurchase = async (req, res) => {
             order_id: newOrder._id,
             product_id: item.product_id,
             batch: item.batch,
-            expiry: expiryDate,
+            expiry: expiryValue,
             units: item.units,
             unit_price: item.unit_price,
             discount: item.discount || 0,
@@ -149,8 +149,12 @@ const createPurchase = async (req, res) => {
             $setOnInsert: {
               product_id: item.product_id,
               batch_number: item.batch,
-              purchase_price: item.unit_price,
-              expiry_date: expiryDate,
+              purchase_price: item.unit_price, // original unit price before discount
+              expiry_date: expiryValue,
+            },
+            $set: {
+              unit_cost: item.total / item.units, //  final cost per unit after discount
+              discount_per_unit: item.units > 0 ? (item.discount || 0) / item.units : 0,
             },
             $inc: { stock: item.units },
           },
@@ -227,9 +231,6 @@ const getPurchasesBySupplier = async (req, res) => {
 
 const getAllPurchases = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-
     // Fetch purchases with supplier populated
     const purchases = await Order.find({ type: "purchase" })
       .populate("supplier_id", "company_name role") // supplier info
@@ -282,20 +283,15 @@ const getAllPurchases = async (req, res) => {
       if (date.getFullYear() === now.getFullYear()) yearlyTotal += total;
     });
 
-    // Pagination
-    const totalItems = purchases.length;
-    const paginatedPurchases = purchasesWithItems.slice((page - 1) * limit, page * limit);
-
     return successResponse(res, "Purchase orders fetched successfully", {
-      purchases: paginatedPurchases,
+      purchases: purchasesWithItems, // ✅ return all purchases (no limit)
       totals: {
         today: todayTotal,
         weekly: weeklyTotal,
         monthly: monthlyTotal,
         yearly: yearlyTotal,
       },
-      currentPage: page,
-      totalItems,
+      totalItems: purchases.length,
     });
 
   } catch (error) {
@@ -303,6 +299,7 @@ const getAllPurchases = async (req, res) => {
     return sendError(res, "Failed to fetch purchase orders");
   }
 };
+
 
 
 
