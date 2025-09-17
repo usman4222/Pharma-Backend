@@ -16,6 +16,7 @@ const createPurchase = async (req, res) => {
   try {
     const {
       invoice_number,
+      purchase_number,
       supplier_id,
       subtotal,
       total,
@@ -88,6 +89,7 @@ const createPurchase = async (req, res) => {
       [
         {
           invoice_number,
+          purchase_number,
           supplier_id,
           subtotal,
           total,

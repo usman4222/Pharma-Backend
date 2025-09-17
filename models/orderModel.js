@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const orderSchema = new mongoose.Schema(
   {
     invoice_number: { type: String, required: true },
+    purchase_number: { type: String },
     supplier_id: { type: mongoose.Schema.Types.ObjectId, ref: "Supplier", default: null },
     booker_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, },
     subtotal: { type: Number, required: true },

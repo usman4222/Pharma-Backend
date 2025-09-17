@@ -267,7 +267,6 @@ const createSale = async (req, res) => {
     );
 
     // 9. Investor Profit Sharing
-    // 9. Investor Profit Sharing
     const grossSale = total; // total sale amount
     const expense = grossSale * 0.02; // 2% of sales
 
