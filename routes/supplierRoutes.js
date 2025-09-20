@@ -11,6 +11,7 @@ router.get("/", supplierController.getAllSuppliers);
 router.get("/active", supplierController.getAllActiveSuppliers);
 router.get("/search", supplierController.searchSuppliers);
 router.put("/balance", supplierController.addSupplierBalance);
+router.get("/supplier-customer", supplierController.getAllActiveSuppliersAndCustomers);
 router.get("/:id", supplierController.getSupplierById);
 router.post("/", supplierController.createSupplier);
 router.put("/:id", supplierController.updateSupplier);

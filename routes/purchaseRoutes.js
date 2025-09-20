@@ -15,6 +15,8 @@ router.get("/supplier/:supplierId", purchaseController.getPurchasesBySupplier);
 // 📤 Get all purchases
 router.get("/", purchaseController.getAllPurchases); 
 
+router.get("/transactions/last", purchaseController.getLastTransactionBySupplierProductBatch);
+
 // 📤 Get purchase for return (by invoice_number or supplier_id)
 router.get("/return/search", purchaseController.getPurchaseForReturn);
 

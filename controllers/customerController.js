@@ -9,55 +9,114 @@ export const getAllCustomers = async (req, res) => {
     };
 
     // Fetch all matching customers
-    const customers = await SupplierModel.find(filter) // assuming SupplierModel holds customers too
-      .populate('area_id', 'name city description')
-      .populate('booker_id', 'name')
+    const customers = await SupplierModel.find(filter)
+      .populate("area_id", "name city description")
+      .populate("booker_id", "name")
       .lean();
 
     const now = new Date();
 
-    // Initialize totals
+    // Initialize totals with counts
     let totals = {
-      today: { debit: 0, credit: 0 },
-      weekly: { debit: 0, credit: 0 },
-      monthly: { debit: 0, credit: 0 },
-      yearly: { debit: 0, credit: 0 },
+      all: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
+      today: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
+      weekly: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
+      monthly: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
+      yearly: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
     };
 
+    // To avoid double counting, we'll track clients by ID for each period
+    let clientTrackers = {
+      all: { debit: new Set(), credit: new Set() },
+      today: { debit: new Set(), credit: new Set() },
+      weekly: { debit: new Set(), credit: new Set() },
+      monthly: { debit: new Set(), credit: new Set() },
+      yearly: { debit: new Set(), credit: new Set() },
+    };
+
+    // Weekly range
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
     customers.forEach((customer) => {
-      const balanceDate = customer.updatedAt ? new Date(customer.updatedAt) : new Date();
-      const debit = customer.receive || 0; // customer debit (amount they owe you)
-      const credit = customer.pay || 0; // customer credit (amount you owe them)
+      const balanceDate = customer.updatedAt
+        ? new Date(customer.updatedAt)
+        : new Date();
 
-      // Today
+      const debit = customer.receive || 0; // they owe you
+      const credit = customer.pay || 0; // you owe them
+
+      // --- ALL ---
+      if (debit > 0) {
+        totals.all.debit += debit;
+        clientTrackers.all.debit.add(customer._id.toString());
+      }
+      if (credit > 0) {
+        totals.all.credit += credit;
+        clientTrackers.all.credit.add(customer._id.toString());
+      }
+
+      // --- TODAY ---
       if (balanceDate.toDateString() === now.toDateString()) {
-        totals.today.debit += debit;
-        totals.today.credit += credit;
+        if (debit > 0) {
+          totals.today.debit += debit;
+          clientTrackers.today.debit.add(customer._id.toString());
+        }
+        if (credit > 0) {
+          totals.today.credit += credit;
+          clientTrackers.today.credit.add(customer._id.toString());
+        }
       }
 
-      // Weekly
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - now.getDay());
-      weekStart.setHours(0, 0, 0, 0);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
+      // --- WEEKLY ---
       if (balanceDate >= weekStart && balanceDate <= weekEnd) {
-        totals.weekly.debit += debit;
-        totals.weekly.credit += credit;
+        if (debit > 0) {
+          totals.weekly.debit += debit;
+          clientTrackers.weekly.debit.add(customer._id.toString());
+        }
+        if (credit > 0) {
+          totals.weekly.credit += credit;
+          clientTrackers.weekly.credit.add(customer._id.toString());
+        }
       }
 
-      // Monthly
-      if (balanceDate.getFullYear() === now.getFullYear() && balanceDate.getMonth() === now.getMonth()) {
-        totals.monthly.debit += debit;
-        totals.monthly.credit += credit;
+      // --- MONTHLY ---
+      if (
+        balanceDate.getFullYear() === now.getFullYear() &&
+        balanceDate.getMonth() === now.getMonth()
+      ) {
+        if (debit > 0) {
+          totals.monthly.debit += debit;
+          clientTrackers.monthly.debit.add(customer._id.toString());
+        }
+        if (credit > 0) {
+          totals.monthly.credit += credit;
+          clientTrackers.monthly.credit.add(customer._id.toString());
+        }
       }
 
-      // Yearly
+      // --- YEARLY ---
       if (balanceDate.getFullYear() === now.getFullYear()) {
-        totals.yearly.debit += debit;
-        totals.yearly.credit += credit;
+        if (debit > 0) {
+          totals.yearly.debit += debit;
+          clientTrackers.yearly.debit.add(customer._id.toString());
+        }
+        if (credit > 0) {
+          totals.yearly.credit += credit;
+          clientTrackers.yearly.credit.add(customer._id.toString());
+        }
       }
+    });
+
+    // Add client counts from sets
+    Object.keys(totals).forEach((period) => {
+      totals[period].debitClients = clientTrackers[period].debit.size;
+      totals[period].creditClients = clientTrackers[period].credit.size;
     });
 
     return successResponse(res, "Customers fetched successfully", {

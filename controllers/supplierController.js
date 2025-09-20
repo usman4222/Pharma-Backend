@@ -9,53 +9,112 @@ export const getAllSuppliers = async (req, res) => {
 
     // Get all suppliers
     const suppliers = await SupplierModel.find(filter)
-      .populate('area_id', 'name city description')
+      .populate("area_id", "name city description")
       .lean();
 
     const now = new Date();
 
-    // Initialize totals
+    // Initialize totals with counts
     let totals = {
-      today: { debit: 0, credit: 0 },
-      weekly: { debit: 0, credit: 0 },
-      monthly: { debit: 0, credit: 0 },
-      yearly: { debit: 0, credit: 0 },
+      all: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
+      today: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
+      weekly: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
+      monthly: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
+      yearly: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
     };
 
+    // Track unique suppliers (avoid double counting)
+    let supplierTrackers = {
+      all: { debit: new Set(), credit: new Set() },
+      today: { debit: new Set(), credit: new Set() },
+      weekly: { debit: new Set(), credit: new Set() },
+      monthly: { debit: new Set(), credit: new Set() },
+      yearly: { debit: new Set(), credit: new Set() },
+    };
+
+    // Weekly range
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
     suppliers.forEach((supplier) => {
-      const balanceDate = supplier.updatedAt ? new Date(supplier.updatedAt) : new Date();
-      const debit = supplier.pay || 0; // assuming 'pay' is debit
-      const credit = supplier.receive || 0; // assuming 'receive' is credit
+      const balanceDate = supplier.updatedAt
+        ? new Date(supplier.updatedAt)
+        : new Date();
 
-      // Today
+      const debit = supplier.pay || 0; // we pay supplier
+      const credit = supplier.receive || 0; // supplier pays us
+
+      // --- ALL ---
+      if (debit > 0) {
+        totals.all.debit += debit;
+        supplierTrackers.all.debit.add(supplier._id.toString());
+      }
+      if (credit > 0) {
+        totals.all.credit += credit;
+        supplierTrackers.all.credit.add(supplier._id.toString());
+      }
+
+      // --- TODAY ---
       if (balanceDate.toDateString() === now.toDateString()) {
-        totals.today.debit += debit;
-        totals.today.credit += credit;
+        if (debit > 0) {
+          totals.today.debit += debit;
+          supplierTrackers.today.debit.add(supplier._id.toString());
+        }
+        if (credit > 0) {
+          totals.today.credit += credit;
+          supplierTrackers.today.credit.add(supplier._id.toString());
+        }
       }
 
-      // Weekly
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - now.getDay());
-      weekStart.setHours(0, 0, 0, 0);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
+      // --- WEEKLY ---
       if (balanceDate >= weekStart && balanceDate <= weekEnd) {
-        totals.weekly.debit += debit;
-        totals.weekly.credit += credit;
+        if (debit > 0) {
+          totals.weekly.debit += debit;
+          supplierTrackers.weekly.debit.add(supplier._id.toString());
+        }
+        if (credit > 0) {
+          totals.weekly.credit += credit;
+          supplierTrackers.weekly.credit.add(supplier._id.toString());
+        }
       }
 
-      // Monthly
-      if (balanceDate.getFullYear() === now.getFullYear() && balanceDate.getMonth() === now.getMonth()) {
-        totals.monthly.debit += debit;
-        totals.monthly.credit += credit;
+      // --- MONTHLY ---
+      if (
+        balanceDate.getFullYear() === now.getFullYear() &&
+        balanceDate.getMonth() === now.getMonth()
+      ) {
+        if (debit > 0) {
+          totals.monthly.debit += debit;
+          supplierTrackers.monthly.debit.add(supplier._id.toString());
+        }
+        if (credit > 0) {
+          totals.monthly.credit += credit;
+          supplierTrackers.monthly.credit.add(supplier._id.toString());
+        }
       }
 
-      // Yearly
+      // --- YEARLY ---
       if (balanceDate.getFullYear() === now.getFullYear()) {
-        totals.yearly.debit += debit;
-        totals.yearly.credit += credit;
+        if (debit > 0) {
+          totals.yearly.debit += debit;
+          supplierTrackers.yearly.debit.add(supplier._id.toString());
+        }
+        if (credit > 0) {
+          totals.yearly.credit += credit;
+          supplierTrackers.yearly.credit.add(supplier._id.toString());
+        }
       }
+    });
+
+    // Add supplier counts from sets
+    Object.keys(totals).forEach((period) => {
+      totals[period].debitSuppliers = supplierTrackers[period].debit.size;
+      totals[period].creditSuppliers = supplierTrackers[period].credit.size;
     });
 
     return successResponse(res, "Suppliers fetched successfully", {
@@ -68,8 +127,6 @@ export const getAllSuppliers = async (req, res) => {
     return sendError(res, "Failed to fetch suppliers", 500);
   }
 };
-
-
 
 
 export const getAllActiveSuppliers = async (req, res) => {
@@ -93,6 +150,34 @@ export const getAllActiveSuppliers = async (req, res) => {
     return sendError(res, "Failed to fetch suppliers", 500);
   }
 };
+
+
+export const getAllActiveSuppliersAndCustomers = async (req, res) => {
+  try {
+    const filter = {
+      status: "active",
+      $or: [
+        { role: "supplier" },
+        { role: "customer" },
+        { role: "both" }
+      ],
+    };
+
+    // Fetch all active suppliers, customers, and both
+    const data = await SupplierModel.find(filter)
+      .populate("area_id", "name city description")
+      .populate("booker_id", "name"); 
+
+    return successResponse(res, "Suppliers and Customers fetched successfully", {
+      data,
+      totalItems: data.length,
+    });
+  } catch (error) {
+    console.error("Fetch Suppliers/Customers Error:", error);
+    return sendError(res, "Failed to fetch suppliers and customers", 500);
+  }
+};
+
 
 export const getSupplierById = async (req, res) => {
   try {
@@ -309,7 +394,8 @@ const supplierController = {
   deleteSupplier,
   searchSuppliers,
   toggleSupplierStatus,
-  addSupplierBalance
+  addSupplierBalance,
+  getAllActiveSuppliersAndCustomers
 };
 
 export default supplierController;

@@ -348,9 +348,6 @@ const createSale = async (req, res) => {
 const getSalesByCustomer = async (req, res) => {
   try {
     const { customerId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
     // Check if customer exists
     const customer = await Supplier.findById(customerId);
@@ -358,32 +355,23 @@ const getSalesByCustomer = async (req, res) => {
       return sendError(res, "Customer not found", 404);
     }
 
-    // Get sales with pagination
+    // Get all sales (no pagination)
     const sales = await Order.find({ supplier_id: customerId, type: "sale" })
-      .populate('supplier_id', 'owner1_name')
-      .populate('booker_id', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+      .populate("supplier_id", "owner1_name")
+      .populate("booker_id", "name")
+      .sort({ createdAt: -1 });
 
-    // Get total count for pagination
+    // Get total count
     const totalSales = await Order.countDocuments({ supplier_id: customerId, type: "sale" });
-    const totalPages = Math.ceil(totalSales / limit);
-    const hasMore = page < totalPages;
 
     return successResponse(res, "Sales fetched successfully", {
       sales,
       totalSales,
-      currentPage: page,
-      totalPages,
-      totalItems: totalSales,
-      pageSize: limit,
-      hasMore
     });
 
   } catch (error) {
-    console.error("Get sales by supplier error:", error);
-    return sendError(res, "Failed to fetch sales by supplier");
+    console.error("Get sales by customer error:", error);
+    return sendError(res, "Failed to fetch sales by customer", 500);
   }
 };
 
@@ -391,17 +379,17 @@ const getSalesByCustomer = async (req, res) => {
 // Get all sales by type (sale)
 const getAllSales = async (req, res) => {
   try {
-    // Fetch sales with supplier and booker populated
+    // Fetch all sales with supplier and booker populated
     const sales = await Order.find({ type: "sale" })
-      .populate('supplier_id', 'company_name role')
-      .populate('booker_id', 'name')
+      .populate("supplier_id", "company_name role address city phone_number")
+      .populate("booker_id", "name")
       .sort({ createdAt: -1 })
       .lean();
 
-    // Fetch OrderItems and attach product details
+    // Fetch all OrderItems for these sales and attach product details
     const saleIds = sales.map((order) => order._id);
     const orderItems = await OrderItem.find({ order_id: { $in: saleIds } })
-      .populate("product_id", "name category unit")
+      .populate("product_id", "name sales_tax_percentage sales_tax")
       .lean();
 
     const salesWithItems = sales.map((order) => {
@@ -411,13 +399,14 @@ const getAllSales = async (req, res) => {
       return { ...order, items };
     });
 
-    // Initialize totals
+    // Initialize totals with counts
     const now = new Date();
-    let totals = {
-      today: { total: 0, profit: 0, expense: 0 },
-      weekly: { total: 0, profit: 0, expense: 0 },
-      monthly: { total: 0, profit: 0, expense: 0 },
-      yearly: { total: 0, profit: 0, expense: 0 },
+    const totals = {
+      today: { total: 0, profit: 0, expense: 0, count: 0 },
+      weekly: { total: 0, profit: 0, expense: 0, count: 0 },
+      monthly: { total: 0, profit: 0, expense: 0, count: 0 },
+      yearly: { total: 0, profit: 0, expense: 0, count: 0 },
+      all: { total: 0, profit: 0, expense: 0, count: 0 },
     };
 
     // Week start/end
@@ -429,18 +418,25 @@ const getAllSales = async (req, res) => {
     weekEnd.setDate(weekStart.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
 
-    // Accumulate totals, profits, and expenses
+    // Calculate totals and counts
     sales.forEach((s) => {
       const date = new Date(s.createdAt);
       const total = s.total || 0;
       const profit = s.profit || 0;
-      const expense = total * 0.02; // 2% of total sale
+      const expense = total * 0.02; // Example: 2% expense
+
+      // All-time
+      totals.all.total += total;
+      totals.all.profit += profit;
+      totals.all.expense += expense;
+      totals.all.count += 1;
 
       // Today
       if (date.toDateString() === now.toDateString()) {
         totals.today.total += total;
         totals.today.profit += profit;
         totals.today.expense += expense;
+        totals.today.count += 1;
       }
 
       // Weekly
@@ -448,6 +444,7 @@ const getAllSales = async (req, res) => {
         totals.weekly.total += total;
         totals.weekly.profit += profit;
         totals.weekly.expense += expense;
+        totals.weekly.count += 1;
       }
 
       // Monthly
@@ -455,6 +452,7 @@ const getAllSales = async (req, res) => {
         totals.monthly.total += total;
         totals.monthly.profit += profit;
         totals.monthly.expense += expense;
+        totals.monthly.count += 1;
       }
 
       // Yearly
@@ -462,24 +460,20 @@ const getAllSales = async (req, res) => {
         totals.yearly.total += total;
         totals.yearly.profit += profit;
         totals.yearly.expense += expense;
+        totals.yearly.count += 1;
       }
     });
-
-    const totalItems = salesWithItems.length;
 
     return successResponse(res, "Sale orders fetched successfully", {
       sales: salesWithItems,
       totals,
-      totalItems,
+      totalItems: salesWithItems.length,
     });
-
   } catch (error) {
     console.error("Get all sale orders error:", error);
-    return sendError(res, "Failed to fetch sales orders");
+    return sendError(res, "Failed to fetch sales orders", 500);
   }
 };
-
-
 
 
 
@@ -488,75 +482,61 @@ const getAllSales = async (req, res) => {
 const getProductSales = async (req, res) => {
   try {
     const { productId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
     // Check if product exists and get product prices
     const product = await Product.findById(productId)
-      .select('name item_code retail_price trade_price');
+      .select("name item_code retail_price trade_price");
     if (!product) {
       return sendError(res, "Product not found", 404);
     }
 
-    // First get count for pagination
-    const totalOrderItems = await OrderItem.countDocuments({
-      product_id: productId,
-      'order_id.type': 'sale'
-    }).populate('order_id');
-
-    const totalPages = Math.ceil(totalOrderItems / limit);
-    const hasMore = page < totalPages;
-
-    // Get order items with necessary data in one optimized query
+    // Get all order items for this product (only sales)
     const orderItems = await OrderItem.aggregate([
       {
         $match: { product_id: new mongoose.Types.ObjectId(productId) }
       },
       {
         $lookup: {
-          from: 'orders',
-          localField: 'order_id',
-          foreignField: '_id',
-          as: 'order'
+          from: "orders",
+          localField: "order_id",
+          foreignField: "_id",
+          as: "order"
         }
       },
-      { $unwind: '$order' },
+      { $unwind: "$order" },
       {
-        $match: { 'order.type': 'sale' }
+        $match: { "order.type": "sale" }
       },
       {
         $lookup: {
-          from: 'suppliers',
-          localField: 'order.supplier_id',
-          foreignField: '_id',
-          as: 'supplier'
+          from: "suppliers",
+          localField: "order.supplier_id",
+          foreignField: "_id",
+          as: "supplier"
         }
       },
-      { $unwind: { path: '$supplier', preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
       {
         $project: {
           _id: 0,
-          date: '$order.createdAt',
-          invoice_number: '$order.invoice_number',
-          type: '$order.type',
-          supplier: '$supplier.name',
-          batch: '$batch',
-          expiry: '$expiry',
-          units: '$units',
-          unit_price: '$unit_price',
-          discount: '$discount',
-          total: '$total',
+          date: "$order.createdAt",
+          invoice_number: "$order.invoice_number",
+          type: "$order.type",
+          supplier: "$supplier.name",
+          batch: "$batch",
+          expiry: "$expiry",
+          units: "$units",
+          unit_price: "$unit_price",
+          discount: "$discount",
+          total: "$total",
           retail_price: product.retail_price,
           trade_price: product.trade_price
         }
       },
-      { $skip: skip },
-      { $limit: limit },
-      { $sort: { date: -1 } }
+      { $sort: { date: -1 } } // Sort only
     ]);
 
-    // Calculate product in/out and total stock
+    // Calculate stock info
     const stockData = await Batch.aggregate([
       {
         $match: { product_id: new mongoose.Types.ObjectId(productId) }
@@ -564,13 +544,13 @@ const getProductSales = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalStock: { $sum: '$stock' },
-          productIn: { $sum: '$stock' } // For sales, product in = stock
+          totalStock: { $sum: "$stock" },
+          productIn: { $sum: "$stock" }
         }
       }
     ]);
 
-    const productOut = 0; // Would need sales data to calculate this
+    const productOut = 0; // If needed, calculate from sales data
     const stockInfo = stockData.length > 0 ? stockData[0] : {
       totalStock: 0,
       productIn: 0
@@ -589,19 +569,15 @@ const getProductSales = async (req, res) => {
         item_code: product.item_code,
         retail_price: product.retail_price,
         trade_price: product.trade_price
-      },
-      currentPage: page,
-      totalPages,
-      totalItems: totalOrderItems,
-      pageSize: limit,
-      hasMore
+      }
     });
 
   } catch (error) {
     console.error("Get sales by product error:", error);
-    return sendError(res, "Failed to fetch product sales");
+    return sendError(res, "Failed to fetch product sales", 500);
   }
 };
+
 
 // Controller: get sale for return
 const getSaleForReturn = async (req, res) => {
@@ -810,50 +786,162 @@ export const getAllSaleReturns = async (req, res) => {
       return { ...ret, items };
     });
 
-    // Calculate totals: today, weekly, monthly, yearly
+    // Initialize totals
     const now = new Date();
-    let todayTotal = 0,
-      weeklyTotal = 0,
-      monthlyTotal = 0,
-      yearlyTotal = 0;
+    const totals = {
+      today: { total: 0, count: 0 },
+      weekly: { total: 0, count: 0 },
+      monthly: { total: 0, count: 0 },
+      yearly: { total: 0, count: 0 },
+      all: { total: 0, count: 0 }, // 👈 all-time totals
+    };
 
+    // Week start/end
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    // Loop through returns and accumulate totals
     returns.forEach((ret) => {
       const date = new Date(ret.createdAt);
       const total = ret.total || 0;
 
-      // Today
-      if (date.toDateString() === now.toDateString()) todayTotal += total;
+      // All-time
+      totals.all.total += total;
+      totals.all.count += 1;
 
-      // Weekly (Sunday → Saturday)
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - now.getDay());
-      weekStart.setHours(0, 0, 0, 0);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 6);
-      weekEnd.setHours(23, 59, 59, 999);
-      if (date >= weekStart && date <= weekEnd) weeklyTotal += total;
+      // Today
+      if (date.toDateString() === now.toDateString()) {
+        totals.today.total += total;
+        totals.today.count += 1;
+      }
+
+      // Weekly
+      if (date >= weekStart && date <= weekEnd) {
+        totals.weekly.total += total;
+        totals.weekly.count += 1;
+      }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth())
-        monthlyTotal += total;
+      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+        totals.monthly.total += total;
+        totals.monthly.count += 1;
+      }
 
       // Yearly
-      if (date.getFullYear() === now.getFullYear()) yearlyTotal += total;
+      if (date.getFullYear() === now.getFullYear()) {
+        totals.yearly.total += total;
+        totals.yearly.count += 1;
+      }
     });
 
     return successResponse(res, "Sale returns fetched successfully", {
       returns: returnsWithItems,
-      totals: {
-        today: todayTotal,
-        weekly: weeklyTotal,
-        monthly: monthlyTotal,
-        yearly: yearlyTotal,
-      },
+      totals,
       totalItems: returns.length,
     });
   } catch (error) {
     console.error("Error fetching sale returns:", error);
     return sendError(res, "Failed to fetch sale returns");
+  }
+};
+
+export const getLastTransactionBySupplierProductBatch = async (req, res) => {
+  try {
+    const { supplierId, productId, batch } = req.query; 
+
+    if (!supplierId && !productId && !batch) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one of customerId, productId, or batch is required",
+      });
+    }
+
+    const itemMatch = {};
+    if (productId) itemMatch.product_id = new mongoose.Types.ObjectId(productId);
+    if (batch) itemMatch.batch = batch;
+
+    const orderMatch = { type: "sale" };
+    if (supplierId) orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
+
+    const lastItem = await OrderItemModel.aggregate([
+      { $match: itemMatch },
+      {
+        $lookup: {
+          from: "orders",
+          localField: "order_id",
+          foreignField: "_id",
+          as: "order",
+          pipeline: [
+            { $match: orderMatch },
+            {
+              $lookup: {
+                from: "suppliers",
+                localField: "supplier_id",
+                foreignField: "_id",
+                as: "supplier",
+              },
+            },
+            { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
+            {
+              $project: {
+                invoice_number: 1,
+                createdAt: 1,
+                type: 1,
+                "supplier.company_name": 1,
+              },
+            },
+          ],
+        },
+      },
+      { $unwind: "$order" },
+      { $sort: { createdAt: -1 } },
+      { $limit: 1 },
+    ]);
+
+    if (!lastItem.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No previous SALE transaction found for the given filters",
+      });
+    }
+
+    const item = lastItem[0];
+
+    // Calculate per-unit discount and percentage
+    const discountPerUnit = item.units ? item.discount / item.units : 0;
+    const discountPercentage = item.unit_price
+      ? (discountPerUnit / item.unit_price) * 100
+      : 0;
+
+    const data = {
+      invoice_number: item.order.invoice_number,
+      date: item.order.createdAt,
+      supplier: item.order.supplier?.company_name || "N/A",
+      type: item.order.type,
+      trade_price: item.unit_price,
+      quantity: item.units,
+      discount_total: item.discount, // total discount
+      discount_per_unit: discountPerUnit, // per unit discount
+      discount_percentage: discountPercentage.toFixed(2), // % per unit
+      batch: item.batch,
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: "Last purchase transaction fetched successfully",
+      data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch last purchase transaction",
+      error: error.message,
+    });
   }
 };
 
@@ -1131,7 +1219,8 @@ const saleController = {
   getSaleById,
   getBookerSales,
   getAllBookersSales,
-  deleteSale
+  deleteSale,
+  getLastTransactionBySupplierProductBatch
 };
 
 export default saleController;

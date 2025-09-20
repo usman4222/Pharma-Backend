@@ -5,8 +5,9 @@ const router = express.Router();
 
 // create sales 
 router.post("/", saleController.createSale);
-router.get("/", saleController.getAllSales);
+router.get("/", saleController.getAllSales); 
 router.get("/product-sales/:productId", saleController.getProductSales);
+router.get("/transactions/last", saleController.getLastTransactionBySupplierProductBatch);
 router.delete("/:orderId", saleController.deleteSale);
 router.get("/return/search", saleController.getSaleForReturn);
 router.post("/return", saleController.returnSaleByInvoice); 
