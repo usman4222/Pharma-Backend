@@ -25,6 +25,10 @@ const investorSchema = new mongoose.Schema({
   profit_percentage: { type: Number }, // optional (if fixed % deal)
   join_date: { type: Date, required: true },
   status: { type: String, enum: ["active", "inactive"], default: "active" },
+  type: {
+    type: String,
+    enum: ["company", "investor"],
+  },
 
   profits: [profitSchema], // monthly profit records
 

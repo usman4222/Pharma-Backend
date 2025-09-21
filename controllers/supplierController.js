@@ -14,7 +14,7 @@ export const getAllSuppliers = async (req, res) => {
 
     const now = new Date();
 
-    // Initialize totals with counts
+    // Initialize totals
     let totals = {
       all: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
       today: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
@@ -23,8 +23,8 @@ export const getAllSuppliers = async (req, res) => {
       yearly: { debit: 0, credit: 0, debitSuppliers: 0, creditSuppliers: 0 },
     };
 
-    // Track unique suppliers (avoid double counting)
-    let supplierTrackers = {
+    // Track unique suppliers
+    const supplierTrackers = {
       all: { debit: new Set(), credit: new Set() },
       today: { debit: new Set(), credit: new Set() },
       weekly: { debit: new Set(), credit: new Set() },
@@ -36,18 +36,20 @@ export const getAllSuppliers = async (req, res) => {
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
-
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
 
-    suppliers.forEach((supplier) => {
-      const balanceDate = supplier.updatedAt
-        ? new Date(supplier.updatedAt)
-        : new Date();
+    // Today range
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
 
-      const debit = supplier.pay || 0; // we pay supplier
+    suppliers.forEach((supplier) => {
+      const debit = supplier.pay || 0;     // we pay supplier
       const credit = supplier.receive || 0; // supplier pays us
+      const updatedAt = new Date(supplier.updatedAt || supplier.createdAt);
 
       // --- ALL ---
       if (debit > 0) {
@@ -60,7 +62,7 @@ export const getAllSuppliers = async (req, res) => {
       }
 
       // --- TODAY ---
-      if (balanceDate.toDateString() === now.toDateString()) {
+      if (updatedAt >= todayStart && updatedAt <= todayEnd) {
         if (debit > 0) {
           totals.today.debit += debit;
           supplierTrackers.today.debit.add(supplier._id.toString());
@@ -72,7 +74,7 @@ export const getAllSuppliers = async (req, res) => {
       }
 
       // --- WEEKLY ---
-      if (balanceDate >= weekStart && balanceDate <= weekEnd) {
+      if (updatedAt >= weekStart && updatedAt <= weekEnd) {
         if (debit > 0) {
           totals.weekly.debit += debit;
           supplierTrackers.weekly.debit.add(supplier._id.toString());
@@ -85,8 +87,8 @@ export const getAllSuppliers = async (req, res) => {
 
       // --- MONTHLY ---
       if (
-        balanceDate.getFullYear() === now.getFullYear() &&
-        balanceDate.getMonth() === now.getMonth()
+        updatedAt.getFullYear() === now.getFullYear() &&
+        updatedAt.getMonth() === now.getMonth()
       ) {
         if (debit > 0) {
           totals.monthly.debit += debit;
@@ -99,7 +101,7 @@ export const getAllSuppliers = async (req, res) => {
       }
 
       // --- YEARLY ---
-      if (balanceDate.getFullYear() === now.getFullYear()) {
+      if (updatedAt.getFullYear() === now.getFullYear()) {
         if (debit > 0) {
           totals.yearly.debit += debit;
           supplierTrackers.yearly.debit.add(supplier._id.toString());
@@ -111,7 +113,7 @@ export const getAllSuppliers = async (req, res) => {
       }
     });
 
-    // Add supplier counts from sets
+    // Set counts
     Object.keys(totals).forEach((period) => {
       totals[period].debitSuppliers = supplierTrackers[period].debit.size;
       totals[period].creditSuppliers = supplierTrackers[period].credit.size;
@@ -127,6 +129,8 @@ export const getAllSuppliers = async (req, res) => {
     return sendError(res, "Failed to fetch suppliers", 500);
   }
 };
+
+
 
 
 export const getAllActiveSuppliers = async (req, res) => {

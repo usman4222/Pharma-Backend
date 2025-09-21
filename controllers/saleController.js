@@ -381,7 +381,7 @@ const getAllSales = async (req, res) => {
   try {
     // Fetch all sales with supplier and booker populated
     const sales = await Order.find({ type: "sale" })
-      .populate("supplier_id", "company_name role address city phone_number")
+      .populate("supplier_id", "company_name role address city phone_number pay receive")
       .populate("booker_id", "name")
       .sort({ createdAt: -1 })
       .lean();
@@ -389,7 +389,15 @@ const getAllSales = async (req, res) => {
     // Fetch all OrderItems for these sales and attach product details
     const saleIds = sales.map((order) => order._id);
     const orderItems = await OrderItem.find({ order_id: { $in: saleIds } })
-      .populate("product_id", "name sales_tax_percentage sales_tax")
+      .populate({
+        path: "product_id",
+        select: "name sales_tax sales_tax_percentage pack_size_id",
+        populate: {
+          path: "pack_size_id",
+          model: "PackSize",
+          select: "name"
+        }
+      })
       .lean();
 
     const salesWithItems = sales.map((order) => {
@@ -852,7 +860,7 @@ export const getAllSaleReturns = async (req, res) => {
 
 export const getLastTransactionBySupplierProductBatch = async (req, res) => {
   try {
-    const { supplierId, productId, batch } = req.query; 
+    const { supplierId, productId, batch } = req.query;
 
     if (!supplierId && !productId && !batch) {
       return res.status(400).json({

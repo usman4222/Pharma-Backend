@@ -227,14 +227,22 @@ const getAllPurchases = async (req, res) => {
   try {
     // Fetch purchases with supplier populated
     const purchases = await Order.find({ type: "purchase" })
-      .populate("supplier_id", "company_name role")
+      .populate("supplier_id", "company_name role address city phone_number pay receive")
       .sort({ createdAt: -1 })
       .lean();
 
     // Fetch OrderItems and attach product details
     const purchaseIds = purchases.map((order) => order._id);
     const orderItems = await OrderItem.find({ order_id: { $in: purchaseIds } })
-      .populate("product_id", "name category unit")
+      .populate({
+        path: "product_id",
+        select: "name sales_tax sales_tax_percentage pack_size_id",
+        populate: {
+          path: "pack_size_id",
+          model: "PackSize",
+          select: "name"
+        }
+      })
       .lean();
 
     const purchasesWithItems = purchases.map((order) => {
@@ -683,7 +691,7 @@ const getAllPurchaseReturns = async (req, res) => {
 
 export const getLastTransactionBySupplierProductBatch = async (req, res) => {
   try {
-    const { supplierId, productId, batch } = req.query; 
+    const { supplierId, productId, batch } = req.query;
 
     if (!supplierId && !productId && !batch) {
       return res.status(400).json({
@@ -822,7 +830,6 @@ const editPurchase = async (req, res) => {
 
   try {
     const { orderId } = req.params;
-    const { invoice_number, subtotal, total, paid_amount, due_amount, net_value, status, items } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       await session.abortTransaction();
@@ -840,7 +847,7 @@ const editPurchase = async (req, res) => {
       return sendError(res, "Not a purchase order", 400);
     }
 
-    // ✅ Reverse old stock changes
+    // Reverse old stock changes
     const oldItems = await OrderItem.find({ order_id: orderId }).session(session);
     for (const item of oldItems) {
       await Batch.findOneAndUpdate(
@@ -853,99 +860,94 @@ const editPurchase = async (req, res) => {
     // Delete old items
     await OrderItem.deleteMany({ order_id: orderId }).session(session);
 
-    // ✅ Update supplier balances
-    const supplierDoc = await SupplierModel.findById(order.supplier_id).session(session);
-    if (!supplierDoc) {
-      await session.abortTransaction();
-      return sendError(res, "Supplier not found", 404);
-    }
+    // Handle supplier balance updates
+    const oldSupplierId = order.supplier_id;
+    const newSupplierId = req.body.supplier_id ?? oldSupplierId;
+    const oldTotal = order.total || 0;
+    const newTotal = req.body.total ?? oldTotal;
 
-    // helper to normalize balances
-    function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
-      let pay = currentPay + addPay; // debit
-      let receive = currentReceive + addReceive; // credit
-
-      if (pay > receive) {
-        pay = pay - receive;
-        receive = 0;
-      } else {
-        receive = receive - pay;
-        pay = 0;
+    if (oldSupplierId.toString() !== newSupplierId.toString()) {
+      // Reverse old supplier balance
+      if (oldSupplierId) {
+        await SupplierModel.findByIdAndUpdate(
+          oldSupplierId,
+          { $inc: { receive: -oldTotal } },
+          { session }
+        );
       }
-      return { pay, receive };
-    }
-    // Reverse old total
-    let { pay: revPay, receive: revReceive } = adjustPayReceive(
-      supplierDoc.pay || 0,
-      supplierDoc.receive || 0,
-      0,
-      -order.total
-    );
 
-    // Apply new total
-    let { pay, receive } = adjustPayReceive(
-      revPay,
-      revReceive,
-      0,
-      total ?? order.total
-    );
-
-    await SupplierModel.findByIdAndUpdate(
-      order.supplier_id,
-      { pay, receive },
-      { session }
-    );
-
-    // ✅ Update order fields
-    order.invoice_number = invoice_number || order.invoice_number;
-    order.subtotal = subtotal ?? order.subtotal;
-    order.total = total ?? order.total;
-    order.paid_amount = paid_amount ?? order.paid_amount;
-    order.due_amount = due_amount ?? order.due_amount;
-    order.net_value = net_value ?? order.net_value;
-    order.status = status ?? order.status;
-    await order.save({ session });
-
-    // ✅ Add new items and update batches
-    const newItems = [];
-    const batchUpdates = [];
-
-    for (const item of items) {
-      const newItem = await OrderItem.create(
-        [{
-          order_id: order._id,
-          product_id: item.product_id,
-          batch: item.batch,
-          expiry: item.expiry,
-          units: item.units,
-          unit_price: item.unit_price,
-          discount: item.discount || 0,
-          total: item.total,
-        }],
+      // Apply balance to new supplier
+      if (newSupplierId) {
+        await SupplierModel.findByIdAndUpdate(
+          newSupplierId,
+          { $inc: { receive: newTotal } },
+          { session }
+        );
+      }
+    } else {
+      // Same supplier, adjust by difference
+      const balanceDiff = newTotal - oldTotal;
+      await SupplierModel.findByIdAndUpdate(
+        oldSupplierId,
+        { $inc: { receive: balanceDiff } },
         { session }
       );
-
-      newItems.push(newItem[0]);
-
-      batchUpdates.push({
-        updateOne: {
-          filter: { product_id: item.product_id, batch_number: item.batch },
-          update: {
-            $setOnInsert: {
-              product_id: item.product_id,
-              batch_number: item.batch,
-              purchase_price: item.unit_price,
-              expiry_date: item.expiry,
-            },
-            $inc: { stock: item.units },
-          },
-          upsert: true,
-        },
-      });
     }
 
-    if (batchUpdates.length) {
-      await Batch.bulkWrite(batchUpdates, { session });
+    // Update order with all fields from req.body
+    Object.keys(req.body).forEach((key) => {
+      order[key] = req.body[key];
+    });
+    order.supplier_id = newSupplierId; // ensure supplier is updated
+    await order.save({ session });
+
+    // Add new items and update batches
+    const newItems = [];
+    if (req.body.items && Array.isArray(req.body.items)) {
+      const batchUpdates = [];
+      for (const item of req.body.items) {
+        const newItem = await OrderItem.create(
+          [
+            {
+              order_id: order._id,
+              product_id: item.product_id,
+              batch: item.batch,
+              expiry: item.expiry,
+              units: item.units,
+              unit_price: item.unit_price,
+              discount: item.discount || 0,
+              total: item.total,
+            },
+          ],
+          { session }
+        );
+
+        newItems.push(newItem[0]);
+
+        batchUpdates.push({
+          updateOne: {
+            filter: { product_id: item.product_id, batch_number: item.batch },
+            update: {
+              $setOnInsert: {
+                product_id: item.product_id,
+                batch_number: item.batch,
+                purchase_price: item.unit_price,
+                expiry_date: item.expiry,
+              },
+              $set: {
+                unit_cost: item.units > 0 ? item.total / item.units : 0,
+                discount_per_unit: item.units > 0 ? (item.discount || 0) / item.units : 0,
+              },
+              $inc: { stock: item.units },
+            },
+            upsert: true,
+          },
+        });
+      }
+
+      if (batchUpdates.length) {
+        await Batch.bulkWrite(batchUpdates, { session });
+      }
     }
 
     await session.commitTransaction();
@@ -962,6 +964,7 @@ const editPurchase = async (req, res) => {
     session.endSession();
   }
 };
+
 
 
 

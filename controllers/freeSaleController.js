@@ -101,52 +101,33 @@ const createFreeSale = async (req, res) => {
 };
 
 const getAllFreeSales = async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+  try {
+    const freeSales = await FreeSale.find()
+      .populate({
+        path: "product_id",
+        select: "name sales_tax sales_tax_percentage pack_size_id",
+        populate: {
+          path: "pack_size_id",
+          model: "PackSize",
+          select: "name"
+        }
+      })
+      .populate({
+        path: "desc_id",
+        select: "desc createdAt updatedAt"
+      })
+      .sort({ createdAt: -1 }); // keep recent first
 
-        const freeSales = await FreeSale.aggregate([
-            {
-                $lookup: {
-                    from: "products",
-                    localField: "product_id",
-                    foreignField: "_id",
-                    as: "product"
-                }
-            },
-            { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
-            {
-                $lookup: {
-                    from: "freesaledescs",
-                    localField: "desc_id",
-                    foreignField: "_id",
-                    as: "description"
-                }
-            },
-            { $unwind: { path: "$description", preserveNullAndEmptyArrays: true } },
-            { $sort: { createdAt: -1 } },
-            { $skip: skip },
-            { $limit: limit }
-        ]);
-
-        const totalSales = await FreeSale.countDocuments();
-        const totalPages = Math.ceil(totalSales / limit);
-        const hasMore = page < totalPages;
-
-        return successResponse(res, "Free sales fetched successfully", {
-            freeSales,
-            currentPage: page,
-            totalPages,
-            totalItems: totalSales,
-            pageSize: limit,
-            hasMore
-        });
-    } catch (error) {
-        console.error("Get Free Sales Error:", error);
-        return sendError(res, "Failed to fetch free sales", 500);
-    }
+    return successResponse(res, "Free sales fetched successfully", {
+      freeSales: freeSales,
+      totalItems: freeSales.length
+    });
+  } catch (error) {
+    console.error("Get Free Sales Error:", error);
+    return sendError(res, "Failed to fetch free sales", 500);
+  }
 };
+
 
 const getFreeSaleById = async (req, res) => {
     try {

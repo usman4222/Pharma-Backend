@@ -8,7 +8,7 @@ export const getAllCustomers = async (req, res) => {
       $or: [{ role: "customer" }, { role: "both" }],
     };
 
-    // Fetch all matching customers
+    // Fetch all customers
     const customers = await SupplierModel.find(filter)
       .populate("area_id", "name city description")
       .populate("booker_id", "name")
@@ -16,7 +16,7 @@ export const getAllCustomers = async (req, res) => {
 
     const now = new Date();
 
-    // Initialize totals with counts
+    // Initialize totals
     let totals = {
       all: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
       today: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
@@ -25,8 +25,8 @@ export const getAllCustomers = async (req, res) => {
       yearly: { debit: 0, credit: 0, debitCustomers: 0, creditCustomers: 0 },
     };
 
-    // To avoid double counting, we'll track clients by ID for each period
-    let clientTrackers = {
+    // Track unique customers
+    const clientTrackers = {
       all: { debit: new Set(), credit: new Set() },
       today: { debit: new Set(), credit: new Set() },
       weekly: { debit: new Set(), credit: new Set() },
@@ -38,18 +38,21 @@ export const getAllCustomers = async (req, res) => {
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
-
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
 
-    customers.forEach((customer) => {
-      const balanceDate = customer.updatedAt
-        ? new Date(customer.updatedAt)
-        : new Date();
+    // Today range
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
 
-      const debit = customer.receive || 0; // they owe you
-      const credit = customer.pay || 0; // you owe them
+    // Process each customer
+    customers.forEach((customer) => {
+      const debit = customer.pay || 0;      // customer owes us
+      const credit = customer.receive || 0; // we owe customer
+      const updatedAt = new Date(customer.updatedAt || customer.createdAt);
 
       // --- ALL ---
       if (debit > 0) {
@@ -62,7 +65,7 @@ export const getAllCustomers = async (req, res) => {
       }
 
       // --- TODAY ---
-      if (balanceDate.toDateString() === now.toDateString()) {
+      if (updatedAt >= todayStart && updatedAt <= todayEnd) {
         if (debit > 0) {
           totals.today.debit += debit;
           clientTrackers.today.debit.add(customer._id.toString());
@@ -74,7 +77,7 @@ export const getAllCustomers = async (req, res) => {
       }
 
       // --- WEEKLY ---
-      if (balanceDate >= weekStart && balanceDate <= weekEnd) {
+      if (updatedAt >= weekStart && updatedAt <= weekEnd) {
         if (debit > 0) {
           totals.weekly.debit += debit;
           clientTrackers.weekly.debit.add(customer._id.toString());
@@ -87,8 +90,8 @@ export const getAllCustomers = async (req, res) => {
 
       // --- MONTHLY ---
       if (
-        balanceDate.getFullYear() === now.getFullYear() &&
-        balanceDate.getMonth() === now.getMonth()
+        updatedAt.getFullYear() === now.getFullYear() &&
+        updatedAt.getMonth() === now.getMonth()
       ) {
         if (debit > 0) {
           totals.monthly.debit += debit;
@@ -101,7 +104,7 @@ export const getAllCustomers = async (req, res) => {
       }
 
       // --- YEARLY ---
-      if (balanceDate.getFullYear() === now.getFullYear()) {
+      if (updatedAt.getFullYear() === now.getFullYear()) {
         if (debit > 0) {
           totals.yearly.debit += debit;
           clientTrackers.yearly.debit.add(customer._id.toString());
@@ -113,10 +116,10 @@ export const getAllCustomers = async (req, res) => {
       }
     });
 
-    // Add client counts from sets
+    // Set client counts
     Object.keys(totals).forEach((period) => {
-      totals[period].debitClients = clientTrackers[period].debit.size;
-      totals[period].creditClients = clientTrackers[period].credit.size;
+      totals[period].debitCustomers = clientTrackers[period].debit.size;
+      totals[period].creditCustomers = clientTrackers[period].credit.size;
     });
 
     return successResponse(res, "Customers fetched successfully", {
@@ -129,6 +132,7 @@ export const getAllCustomers = async (req, res) => {
     return sendError(res, "Failed to fetch customers", 500);
   }
 };
+
 
 
 export const getAllActiveCustomers = async (req, res) => {

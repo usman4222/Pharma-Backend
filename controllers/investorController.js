@@ -32,31 +32,53 @@ const checkEligibility = (joinDate, month) => {
 // 🔹 Add Investor
 const addInvestor = async (req, res) => {
   try {
-    const { name, amount, profit_percentage, join_date } = req.body;
+    const { name, amount, profit_percentage, join_date, type } = req.body;
 
     // Validate required fields
-    if (!name || !amount || !profit_percentage || !join_date) {
-      return sendError(res, "Name, amount, date and profit percentage are required", 400);
+    if (!name || !amount || !profit_percentage || !join_date || !type) {
+      return sendError(
+        res,
+        "Name, amount, profit percentage, join date and type are required",
+        400
+      );
     }
 
-    // Check if an investor with the same name already exists
+    // Validate type
+    if (!["company", "investor"].includes(type)) {
+      return sendError(res, "Invalid type. Must be 'company' or 'investor'", 400);
+    }
+
+    // 🔹 Prevent multiple "company" docs
+    if (type === "company") {
+      const existingCompany = await Investor.findOne({ type: "company" });
+      if (existingCompany) {
+        return sendError(res, "A company record already exists. Only one company is allowed.", 400);
+      }
+    }
+
+    // 🔹 Check if an investor with the same name already exists
     const existingInvestor = await Investor.findOne({ name });
     if (existingInvestor) {
       return sendError(res, "Investor with this name already exists", 400);
     }
 
+    // 🔹 Create new investor
     const investor = await Investor.create({
       name,
       profit_percentage,
       join_date,
+      type,
       amount_invested: [{ amount, date: join_date || new Date() }],
     });
 
     return successResponse(res, "Investor added successfully", { investor });
   } catch (error) {
+    console.error("Add investor error:", error);
     return sendError(res, error.message);
   }
 };
+
+
 
 // 🔹 Add New Investment For existing investor
 const addInvestment = async (req, res) => {
@@ -149,6 +171,7 @@ export const getInvestors = async (req, res) => {
           profit_percentage: inv.profit_percentage,
           join_date: inv.join_date,
           status: inv.status,
+          type: inv.type,
 
           // 💰 balances
           debit: inv.debit || 0,
