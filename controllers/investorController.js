@@ -36,11 +36,7 @@ const addInvestor = async (req, res) => {
 
     // Validate required fields
     if (!name || !amount || !profit_percentage || !join_date || !type) {
-      return sendError(
-        res,
-        "Name, amount, profit percentage, join date and type are required",
-        400
-      );
+      return sendError(res, "Name, amount, profit percentage, join date and type are required", 400);
     }
 
     // Validate type
@@ -48,26 +44,18 @@ const addInvestor = async (req, res) => {
       return sendError(res, "Invalid type. Must be 'company' or 'investor'", 400);
     }
 
-    // 🔹 Prevent multiple "company" docs
-    if (type === "company") {
-      const existingCompany = await Investor.findOne({ type: "company" });
-      if (existingCompany) {
-        return sendError(res, "A company record already exists. Only one company is allowed.", 400);
-      }
-    }
-
-    // 🔹 Check if an investor with the same name already exists
+    // Check if an investor with the same name already exists
     const existingInvestor = await Investor.findOne({ name });
     if (existingInvestor) {
       return sendError(res, "Investor with this name already exists", 400);
     }
 
-    // 🔹 Create new investor
+    // Create new investor
     const investor = await Investor.create({
       name,
       profit_percentage,
       join_date,
-      type,
+      type, // ✅ now saving type
       amount_invested: [{ amount, date: join_date || new Date() }],
     });
 
@@ -77,7 +65,6 @@ const addInvestor = async (req, res) => {
     return sendError(res, error.message);
   }
 };
-
 
 
 // 🔹 Add New Investment For existing investor
