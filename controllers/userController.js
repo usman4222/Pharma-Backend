@@ -111,7 +111,7 @@ export const createUser = async (req, res) => {
     const existingUser = await User.findOne({ area_id, email });
     if (existingUser) {
       return sendError(res, "This area is already assigned to this employee", 400);
-    } 
+    }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -138,13 +138,17 @@ export const createUser = async (req, res) => {
       area_id,
       role: role || "",
       employee_type: employee_type || "",
-      incentive_type: incentive_type || "",
       incentive_percentage: incentive_percentage || 0,
       join_date: join_date || null,
       cnic: cnic || "",
       status: status || "active",
       ...filePaths
     };
+
+    // Add only if present
+    if (incentive_type) {
+      userData.incentive_type = incentive_type;
+    }
 
     // Create user
     const user = await User.create(userData);

@@ -45,8 +45,8 @@ const userSchema = new mongoose.Schema(
     },
     incentive_type: {
       type: String,
-      enum: ["recovery", "sale"],
-      default: "sale",
+      enum: ["recovery", "sale", "none"],
+      default: "none",
     },
     incentive_percentage: { type: Number },
     employee_type: {
