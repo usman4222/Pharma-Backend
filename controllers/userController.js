@@ -6,12 +6,11 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 
 // GET all users (filtered by status)
-const getAllUsers = async (req, res) => {
+export const getAllUsers = async (req, res) => {
   try {
     const { status } = req.query;
 
     const query = {
-      // exclude admin@gmail.com
       email: { $ne: "admin@gmail.com" },
     };
 
@@ -19,23 +18,57 @@ const getAllUsers = async (req, res) => {
       query.status = status;
     }
 
-    // Fetch all users except admin
+    // Fetch users
     const users = await User.find(query)
       .sort({ createdAt: -1 })
       .populate("area_id", "name city description");
 
+    // Get debit/credit totals for each user
+    const ledgerTotals = await UserLedger.aggregate([
+      {
+        $group: {
+          _id: "$user_id",
+          totalDebit: { $sum: "$debit" },
+          totalCredit: { $sum: "$credit" },
+        },
+      },
+    ]);
+
+    // Convert to map for easy lookup
+    const ledgerMap = ledgerTotals.reduce((acc, item) => {
+      acc[item._id.toString()] = {
+        totalDebit: item.totalDebit,
+        totalCredit: item.totalCredit,
+      };
+      return acc;
+    }, {});
+
+    // Attach totals to each user
+    const usersWithLedger = users.map((user) => {
+      const ledger = ledgerMap[user._id.toString()] || {
+        totalDebit: 0,
+        totalCredit: 0,
+      };
+
+      return {
+        ...user.toObject(),
+        totalDebit: ledger.totalDebit,
+        totalCredit: ledger.totalCredit,
+      };
+    });
+
     return successResponse(res, "Users fetched successfully", {
-      users,
+      users: usersWithLedger,
       totalItems: users.length,
     });
   } catch (error) {
-    return sendError(res, "Failed to fetch users", error);
+    return sendError(res, "Failed to fetch users", error.message);
   }
 };
 
 
 
-const getAllActiveUsers = async (req, res) => {
+export const getAllActiveUsers = async (req, res) => {
   try {
     const { status } = req.query;
 
@@ -48,19 +81,58 @@ const getAllActiveUsers = async (req, res) => {
       query.status = status;
     }
 
-    // Fetch all users except admin
+    // Fetch active users
     const users = await User.find(query)
       .sort({ createdAt: -1 })
       .populate("area_id", "name city description");
 
-    return successResponse(res, "Users fetched successfully", {
-      users,
+    const userIds = users.map((u) => u._id);
+
+    // Aggregate debit/credit totals only for active user IDs
+    const ledgerTotals = await UserLedger.aggregate([
+      { $match: { user_id: { $in: userIds } } },
+      {
+        $group: {
+          _id: "$user_id",
+          totalDebit: { $sum: "$debit" },
+          totalCredit: { $sum: "$credit" },
+        },
+      },
+    ]);
+
+    // Convert aggregation result to map for easy lookup
+    const ledgerMap = ledgerTotals.reduce((acc, item) => {
+      acc[item._id.toString()] = {
+        totalDebit: item.totalDebit || 0,
+        totalCredit: item.totalCredit || 0,
+      };
+      return acc;
+    }, {});
+
+    // Merge totals into users
+    const usersWithLedger = users.map((user) => {
+      const ledger = ledgerMap[user._id.toString()] || {
+        totalDebit: 0,
+        totalCredit: 0,
+      };
+
+      return {
+        ...user.toObject(),
+        totalDebit: ledger.totalDebit,
+        totalCredit: ledger.totalCredit,
+        netBalance: ledger.totalCredit - ledger.totalDebit,
+      };
+    });
+
+    return successResponse(res, "Active users fetched successfully", {
+      users: usersWithLedger,
       totalItems: users.length,
     });
   } catch (error) {
-    return sendError(res, "Failed to fetch users", error);
+    return sendError(res, "Failed to fetch users", error.message || error);
   }
 };
+
 
 
 // GET single user
