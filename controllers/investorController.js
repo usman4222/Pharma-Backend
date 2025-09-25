@@ -31,12 +31,29 @@ const checkEligibility = (joinDate, month) => {
 
 // 🔹 Add Investor
 const addInvestor = async (req, res) => {
+  const session = await Investor.startSession();
+  session.startTransaction();
+
   try {
-    const { name, amount, profit_percentage, join_date, type } = req.body;
+    const {
+      name,
+      mobile_number,
+      father_name,
+      address,
+      amount,
+      profit_percentage,
+      join_date,
+      type,
+      cnic_number,
+      cnic_front_photo,
+      cnic_back_photo,
+      stam_photo,
+      check_photo
+    } = req.body;
 
     // Validate required fields
-    if (!name || !amount || !profit_percentage || !join_date || !type) {
-      return sendError(res, "Name, amount, profit percentage, join date and type are required", 400);
+    if (!name || !amount || !join_date || !type) {
+      return sendError(res, "Name, amount, join date and type are required", 400);
     }
 
     // Validate type
@@ -44,27 +61,57 @@ const addInvestor = async (req, res) => {
       return sendError(res, "Invalid type. Must be 'company' or 'investor'", 400);
     }
 
-    // Check if an investor with the same name already exists
+    // Check duplicate
     const existingInvestor = await Investor.findOne({ name });
     if (existingInvestor) {
       return sendError(res, "Investor with this name already exists", 400);
     }
 
-    // Create new investor
-    const investor = await Investor.create({
+    // 1. Create new investor
+    const investor = await Investor.create([{
       name,
-      profit_percentage,
+      father_name,
+      mobile_number,
+      address,
+      profit_percentage: profit_percentage || null,
       join_date,
-      type, // ✅ now saving type
+      type,
+      cnic_number: cnic_number || null,
+      cnic_front_photo: cnic_front_photo || null,
+      cnic_back_photo: cnic_back_photo || null,
+      stam_photo: stam_photo || null,
+      check_photo: check_photo || null,
       amount_invested: [{ amount, date: join_date || new Date() }],
-    });
+    }], { session });
 
-    return successResponse(res, "Investor added successfully", { investor });
+    // 2. Get all active investors (including company)
+    const investors = await Investor.find({ status: "active" }).session(session);
+
+    // 3. Calculate total capital
+    const totalCapital = investors.reduce((sum, inv) => {
+      const invested = inv.amount_invested.reduce((s, i) => s + i.amount, 0);
+      return sum + invested;
+    }, 0);
+
+    // 4. Update shares for each investor
+    for (const inv of investors) {
+      const invested = inv.amount_invested.reduce((s, i) => s + i.amount, 0);
+      inv.shares = totalCapital > 0 ? (invested / totalCapital) * 100 : 0;
+      await inv.save({ session });
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return successResponse(res, "Investor added successfully and shares recalculated", { investor: investor[0] });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Add investor error:", error);
     return sendError(res, error.message);
   }
 };
+
 
 
 // 🔹 Add New Investment For existing investor
@@ -159,6 +206,7 @@ export const getInvestors = async (req, res) => {
           join_date: inv.join_date,
           status: inv.status,
           type: inv.type,
+          shares: inv.shares,
 
           // 💰 balances
           debit: inv.debit || 0,
@@ -223,26 +271,82 @@ export const updateInvestment = async (req, res) => {
 
 // 🔹 Edit Investor
 const editInvestor = async (req, res) => {
+  const session = await Investor.startSession();
+  session.startTransaction();
+
   try {
     const { id } = req.params;
-    const { name, profit_percentage, join_date } = req.body;
+    const {
+      name, profit_percentage, join_date, amount,
+      father_name, mobile_number, address,
+      cnic_number, cnic_front_photo, cnic_back_photo,
+      stam_photo, check_photo
+    } = req.body;
 
-    const investor = await Investor.findById(id);
-    if (!investor) return sendError(res, "Investor not found", 404);
+    const investor = await Investor.findById(id).session(session);
+    if (!investor) {
+      await session.abortTransaction();
+      return sendError(res, "Investor not found", 404);
+    }
 
-    // Update only the provided fields
+    // --- Update fields ---
     if (name) investor.name = name;
     if (profit_percentage !== undefined) investor.profit_percentage = profit_percentage;
     if (join_date) investor.join_date = new Date(join_date);
+    if (father_name) investor.father_name = father_name;
+    if (mobile_number) investor.mobile_number = mobile_number;
+    if (address) investor.address = address;
+    if (cnic_number) investor.cnic_number = cnic_number;
+    if (cnic_front_photo) investor.cnic_front_photo = cnic_front_photo;
+    if (cnic_back_photo) investor.cnic_back_photo = cnic_back_photo;
+    if (stam_photo) investor.stam_photo = stam_photo;
+    if (check_photo) investor.check_photo = check_photo;
 
-    // Save without touching amount_invested
-    await investor.save();
+    if (amount !== undefined) {
+      investor.amount_invested.push({
+        amount,
+        date: join_date || new Date()
+      });
+    }
 
-    return successResponse(res, "Investor updated successfully", investor);
+    await investor.save({ session });
+
+    // --- Recalc shares ---
+    const investors = await Investor.find({ status: "active" }).session(session);
+
+    const totalCapital = investors.reduce((sum, inv) => {
+      const invested = inv.amount_invested.reduce((s, i) => s + i.amount, 0);
+      return sum + invested;
+    }, 0);
+
+    for (const inv of investors) {
+      const invested = inv.amount_invested.reduce((s, i) => s + i.amount, 0);
+      inv.shares = totalCapital > 0 ? (invested / totalCapital) * 100 : 0;
+      await inv.save({ session });
+    }
+
+    await session.commitTransaction();
+
+    // ✅ return plain object (avoid circular JSON error)
+    const plainInvestor = investor.toObject();
+
+    return successResponse(
+      res,
+      "Investor updated successfully and shares recalculated",
+      plainInvestor
+    );
   } catch (error) {
+    // Abort only if still active
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     return sendError(res, error.message);
+  } finally {
+    session.endSession();
   }
 };
+
+
 
 
 // 🔹 Get Single Investor + Profit Summary + Investments
@@ -256,14 +360,16 @@ export const getInvestorById = async (req, res) => {
     // Fetch profits for this investor
     const profitsRaw = await investorProfit.find({ investor_id: id })
       .sort({ month: -1 })
-      .lean(); // lean() to get plain JS objects
+      .lean();
 
     // Attach invoice_number for each profit record
     const profits = await Promise.all(
       profitsRaw.map(async (p) => {
         let invoice_number = null;
         if (p.order_id) {
-          const order = await Order.findById(p.order_id).select("invoice_number").lean();
+          const order = await Order.findById(p.order_id)
+            .select("invoice_number")
+            .lean();
           invoice_number = order ? order.invoice_number : null;
         }
         return { ...p, invoice_number };
@@ -292,19 +398,36 @@ export const getInvestorById = async (req, res) => {
     const transactions = investor.debit_credit || [];
 
     return successResponse(res, "Investor retrieved successfully", {
+      // 🧾 Core info
       id: investor._id,
       name: investor.name,
-      amount_invested: investor.amount_invested,
-      total_invested: totalInvested,
+      father_name: investor.father_name,
       profit_percentage: investor.profit_percentage,
+      type: investor.type,
       join_date: investor.join_date,
       status: investor.status,
+
+      // 📞 Contact info
+      mobile_number: investor.mobile_number,
+      address: investor.address,
+      cnic_number: investor.cnic_number,
+
+      // 🖼️ Photo URLs
+      cnic_front_photo: investor.cnic_front_photo,
+      cnic_back_photo: investor.cnic_back_photo,
+      stam_photo: investor.stam_photo,
+      check_photo: investor.check_photo,
+
+      // 💵 Investments
+      amount_invested: investor.amount_invested,
+      total_invested: totalInvested,
 
       // 💰 balances
       debit,
       credit,
       net_balance,
 
+      // 📊 Profits + Transactions
       profits,        // profits with invoice_number
       transactions,   // full debit_credit history
 
@@ -314,9 +437,11 @@ export const getInvestorById = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Get investor by ID error:", error);
     return sendError(res, error.message);
   }
 };
+
 
 // ✅ Add Debit/Credit Entry Controller (incremental)
 export const addInvestorLedger = async (req, res) => {

@@ -1,18 +1,5 @@
 import mongoose from "mongoose";
 
-// Profit sub-schema
-const profitSchema = new mongoose.Schema({
-  month: { type: String, required: true }, // e.g., "2025-08"
-  sales: { type: Number, required: true },
-  gross_profit: { type: Number, default: 0 },
-  expense: { type: Number, default: 0 },
-  charity: { type: Number, default: 0 },
-  net_profit: { type: Number, default: 0 },
-  investor_share: { type: Number, default: 0 },
-  owner_share: { type: Number, default: 0 },
-  total: { type: Number, default: 0 },
-}, { _id: false });
-
 // Investor schema
 const investorSchema = new mongoose.Schema({
   name: { type: String, required: true },
@@ -23,14 +10,16 @@ const investorSchema = new mongoose.Schema({
     }
   ],
   profit_percentage: { type: Number }, // optional (if fixed % deal)
+  mobile_number: { type: String },
+  father_name: { type: String },
+  address: { type: String },
+  shares: { type: Number, default: 0 },
   join_date: { type: Date, required: true },
   status: { type: String, enum: ["active", "inactive"], default: "active" },
   type: {
     type: String,
     enum: ["company", "investor"],
   },
-
-  profits: [profitSchema], // monthly profit records
 
   debit_credit: [
     {
@@ -48,6 +37,26 @@ const investorSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  cnic_number: {
+    type: String,
+    trim: true
+  },
+  cnic_front_photo: {
+    type: String,
+    trim: true
+  },
+  cnic_back_photo: {
+    type: String,
+    trim: true
+  },
+  stam_photo: {
+    type: String,
+    trim: true
+  },
+  check_photo: {
+    type: String,
+    trim: true
+  }
 }, { timestamps: true });
 
 export default mongoose.model("Investor", investorSchema);

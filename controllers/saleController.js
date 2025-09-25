@@ -267,18 +267,24 @@ const createSale = async (req, res) => {
     );
 
     // 9. Investor Profit Sharing
-    const grossSale = total; // total sale amount
-    const expense = grossSale * 0.02; // 2% of sales
+    const grossSale = total;
+    const expense = grossSale * 0.02;
 
-    const profit = totalOrderProfit; // total profit calculated from items
-    const charity = profit * 0.10;   // 10% of profit, not sale
-    const distributable = profit - charity - expense; // distributable profit to investors and owner
+    const profit = totalOrderProfit;
+    const charity = profit * 0.10;
+    const distributable = profit - charity - expense;
 
     const investors = await Investor.find({ status: "active" }).session(session);
     const today = new Date();
     const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 
+    let totalGivenToInvestors = 0;
+    let companyRecord = null;
+
+    // Loop investors
     for (const inv of investors) {
+      console.log("Checking investor:", inv.name, "Join date:", inv.join_date);
+
       const joinDate = new Date(inv.join_date);
       let eligible = false;
 
@@ -292,11 +298,30 @@ const createSale = async (req, res) => {
         eligible = today.getDate() >= 15;
       }
 
+      console.log("Eligible?", eligible);
+
       if (!eligible) continue;
 
-      const invShare = (distributable * inv.profit_percentage) / 100;
-      const ownerShare = distributable - invShare;
+      // Step 1: Base share by shares %
+      const baseShare = (distributable * inv.shares) / 100;
 
+      // Step 2: Actual profit to investor
+      const invShare = (baseShare * (inv.profit_percentage || 100)) / 100;
+
+      console.log("Distributable:", distributable);
+      console.log("Investor:", inv.name, "Shares:", inv.shares, "Profit %:", inv.profit_percentage);
+      console.log("BaseShare:", baseShare, "InvShare:", invShare);
+
+      // Step 3: Remainder of investor share goes to company
+      const remainderToCompany = baseShare - invShare;
+
+      totalGivenToInvestors += invShare;
+
+      console.log("Distributable:", distributable);
+      console.log("Investor:", inv.name, "Shares:", inv.shares, "Profit %:", inv.profit_percentage);
+      console.log("BaseShare:", baseShare, "InvShare:", invShare);
+
+      // Save investor profit record
       await investorProfit.create(
         [
           {
@@ -309,7 +334,7 @@ const createSale = async (req, res) => {
             charity,
             net_profit: distributable,
             investor_share: invShare,
-            owner_share: ownerShare,
+            owner_share: remainderToCompany, // tracked so you see what went to company
             total: grossSale,
           }
         ],
@@ -318,6 +343,39 @@ const createSale = async (req, res) => {
 
       inv.credit = (inv.credit || 0) + invShare;
       await inv.save({ session });
+
+      // Add the remainder to company directly
+      if (companyRecord) {
+        companyRecord.credit = (companyRecord.credit || 0) + remainderToCompany;
+      }
+    }
+
+    // Finally, add company’s own direct share
+    if (companyRecord) {
+      const companyOwnShare = (distributable * companyRecord.shares) / 100;
+      const totalCompanyShare = companyOwnShare + (companyRecord.credit || 0);
+
+      await investorProfit.create(
+        [
+          {
+            investor_id: companyRecord._id,
+            month: monthKey,
+            order_id: newOrder[0]._id,
+            sales: grossSale,
+            gross_profit: profit,
+            expense,
+            charity,
+            net_profit: distributable,
+            investor_share: 0,
+            owner_share: companyOwnShare,
+            total: grossSale,
+          }
+        ],
+        { session }
+      );
+
+      companyRecord.credit = totalCompanyShare;
+      await companyRecord.save({ session });
     }
 
     await session.commitTransaction();
