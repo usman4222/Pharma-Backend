@@ -33,26 +33,15 @@ export const createArea = async (req, res) => {
 // Get All Areas
 export const getAllAreas = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1; // Default page = 1
-    const limit = parseInt(req.query.limit) || 10; // Default limit = 10
-    const skip = (page - 1) * limit;
-
-    const areas = await Area.find().skip(skip).limit(limit);
+    const areas = await Area.find(); // Fetch all areas without pagination
     const totalAreas = await Area.countDocuments();
-    const totalPages = Math.ceil(totalAreas / limit);
-
-    const hasMore = page < totalPages;
 
     return successResponse(
       res,
       "Areas fetched successfully",
       {
         areas,
-        currentPage: page,
-        totalPages,
         totalItems: totalAreas,
-        pageSize: limit,
-        hasMore,
       },
       200
     );
@@ -63,40 +52,31 @@ export const getAllAreas = async (req, res) => {
 };
 
 
+
 // Get All Active Areas
 export const getAllActiveAreas = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1; // Default page = 1
-    const limit = parseInt(req.query.limit) || 10; // Default limit = 10
-    const skip = (page - 1) * limit;
-
     // Only fetch areas with status = "active"
     const filter = { status: "active" };
 
-    const areas = await Area.find(filter).skip(skip).limit(limit);
+    const areas = await Area.find(filter);
     const totalAreas = await Area.countDocuments(filter); // count only active ones
-    const totalPages = Math.ceil(totalAreas / limit);
-
-    const hasMore = page < totalPages;
 
     return successResponse(
       res,
       "Active areas fetched successfully",
       {
         areas,
-        currentPage: page,
-        totalPages,
         totalItems: totalAreas,
-        pageSize: limit,
-        hasMore,
       },
       200
     );
   } catch (error) {
-    console.error("Get All Areas Error:", error);
-    return sendError(res, "Failed to fetch areas", 500);
+    console.error("Get All Active Areas Error:", error);
+    return sendError(res, "Failed to fetch active areas", 500);
   }
 };
+
 
 
 // Get Single Area by ID
