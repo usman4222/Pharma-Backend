@@ -1,5 +1,8 @@
 import { OrderModel as Order } from "../models/orderModel.js";
-import { OrderItemModel as OrderItem, OrderItemModel } from "../models/orderItemModel.js";
+import {
+  OrderItemModel as OrderItem,
+  OrderItemModel,
+} from "../models/orderItemModel.js";
 import { SupplierModel as Supplier } from "../models/supplierModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
 import { ProductModel as Product } from "../models/productModel.js";
@@ -17,7 +20,7 @@ const createSale = async (req, res) => {
   try {
     const {
       invoice_number,
-      supplier_id,   // customer
+      supplier_id, // customer
       booker_id,
       subtotal,
       total,
@@ -29,7 +32,7 @@ const createSale = async (req, res) => {
       type = "sale",
     } = req.body;
 
-    console.log("req.body", req.body)
+    console.log("req.body", req.body);
 
     // 1. Validate required fields
     const requiredFields = {
@@ -43,12 +46,18 @@ const createSale = async (req, res) => {
     };
 
     const missingFields = Object.entries(requiredFields)
-      .filter(([_, value]) => value === undefined || value === null || value === "")
+      .filter(
+        ([_, value]) => value === undefined || value === null || value === ""
+      )
       .map(([key]) => key);
 
     if (missingFields.length > 0) {
       await session.abortTransaction();
-      return sendError(res, `Missing required fields: ${missingFields.join(", ")}`, 400);
+      return sendError(
+        res,
+        `Missing required fields: ${missingFields.join(", ")}`,
+        400
+      );
     }
 
     // Ensure paid amount is not greater than total
@@ -156,7 +165,7 @@ const createSale = async (req, res) => {
     let totalOrderProfit = 0;
 
     for (const item of items) {
-      console.log("item", item)
+      console.log("item", item);
       const product = await Product.findById(item.product_id).session(session);
       if (!product) {
         await session.abortTransaction();
@@ -195,7 +204,8 @@ const createSale = async (req, res) => {
         expiryValue = item.expiry;
       }
 
-      const calculatedTotal = item.units * item.unit_price - (item.discount || 0);
+      const calculatedTotal =
+        item.units * item.unit_price - (item.discount || 0);
 
       const orderItem = await OrderItem.create(
         [
@@ -225,7 +235,6 @@ const createSale = async (req, res) => {
       });
     }
 
-
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
@@ -238,7 +247,12 @@ const createSale = async (req, res) => {
     );
 
     // 8. Adjust supplier balances
-    function adjustPayReceive(currentPay, currentReceive, addPay = 0, addReceive = 0) {
+    function adjustPayReceive(
+      currentPay,
+      currentReceive,
+      addPay = 0,
+      addReceive = 0
+    ) {
       let pay = currentPay + addPay;
       let receive = currentReceive + addReceive;
 
@@ -271,12 +285,16 @@ const createSale = async (req, res) => {
     const expense = grossSale * 0.02;
 
     const profit = totalOrderProfit;
-    const charity = profit * 0.10;
+    const charity = profit * 0.1;
     const distributable = profit - charity - expense;
 
-    const investors = await Investor.find({ status: "active" }).session(session);
+    const investors = await Investor.find({ status: "active" }).session(
+      session
+    );
     const today = new Date();
-    const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    const monthKey = `${today.getFullYear()}-${String(
+      today.getMonth() + 1
+    ).padStart(2, "0")}`;
 
     let totalGivenToInvestors = 0;
     let companyRecord = null;
@@ -309,7 +327,14 @@ const createSale = async (req, res) => {
       const invShare = (baseShare * (inv.profit_percentage || 100)) / 100;
 
       console.log("Distributable:", distributable);
-      console.log("Investor:", inv.name, "Shares:", inv.shares, "Profit %:", inv.profit_percentage);
+      console.log(
+        "Investor:",
+        inv.name,
+        "Shares:",
+        inv.shares,
+        "Profit %:",
+        inv.profit_percentage
+      );
       console.log("BaseShare:", baseShare, "InvShare:", invShare);
 
       // Step 3: Remainder of investor share goes to company
@@ -318,7 +343,14 @@ const createSale = async (req, res) => {
       totalGivenToInvestors += invShare;
 
       console.log("Distributable:", distributable);
-      console.log("Investor:", inv.name, "Shares:", inv.shares, "Profit %:", inv.profit_percentage);
+      console.log(
+        "Investor:",
+        inv.name,
+        "Shares:",
+        inv.shares,
+        "Profit %:",
+        inv.profit_percentage
+      );
       console.log("BaseShare:", baseShare, "InvShare:", invShare);
 
       // Save investor profit record
@@ -336,7 +368,7 @@ const createSale = async (req, res) => {
             investor_share: invShare,
             owner_share: remainderToCompany, // tracked so you see what went to company
             total: grossSale,
-          }
+          },
         ],
         { session }
       );
@@ -369,7 +401,7 @@ const createSale = async (req, res) => {
             investor_share: 0,
             owner_share: companyOwnShare,
             total: grossSale,
-          }
+          },
         ],
         { session }
       );
@@ -387,7 +419,7 @@ const createSale = async (req, res) => {
         order: newOrder[0],
         items: orderItems,
         distributable,
-        total_profit: totalOrderProfit
+        total_profit: totalOrderProfit,
       },
       201
     );
@@ -399,8 +431,6 @@ const createSale = async (req, res) => {
     session.endSession();
   }
 };
-
-
 
 // Get all sales by Customer ID
 const getSalesByCustomer = async (req, res) => {
@@ -420,26 +450,30 @@ const getSalesByCustomer = async (req, res) => {
       .sort({ createdAt: -1 });
 
     // Get total count
-    const totalSales = await Order.countDocuments({ supplier_id: customerId, type: "sale" });
+    const totalSales = await Order.countDocuments({
+      supplier_id: customerId,
+      type: "sale",
+    });
 
     return successResponse(res, "Sales fetched successfully", {
       sales,
       totalSales,
     });
-
   } catch (error) {
     console.error("Get sales by customer error:", error);
     return sendError(res, "Failed to fetch sales by customer", 500);
   }
 };
 
-
 // Get all sales by type (sale)
 const getAllSales = async (req, res) => {
   try {
     // Fetch all sales with supplier and booker populated
     const sales = await Order.find({ type: "sale" })
-      .populate("supplier_id", "company_name role address city phone_number pay receive")
+      .populate(
+        "supplier_id",
+        "company_name role address city phone_number pay receive"
+      )
       .populate("booker_id", "name")
       .sort({ createdAt: -1 })
       .lean();
@@ -453,8 +487,8 @@ const getAllSales = async (req, res) => {
         populate: {
           path: "pack_size_id",
           model: "PackSize",
-          select: "name"
-        }
+          select: "name",
+        },
       })
       .lean();
 
@@ -514,7 +548,10 @@ const getAllSales = async (req, res) => {
       }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+      if (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth()
+      ) {
         totals.monthly.total += total;
         totals.monthly.profit += profit;
         totals.monthly.expense += expense;
@@ -541,17 +578,15 @@ const getAllSales = async (req, res) => {
   }
 };
 
-
-
-
 // Get all sales for a specific product
 const getProductSales = async (req, res) => {
   try {
     const { productId } = req.params;
 
     // Check if product exists and get product prices
-    const product = await Product.findById(productId)
-      .select("name item_code retail_price trade_price");
+    const product = await Product.findById(productId).select(
+      "name item_code retail_price trade_price"
+    );
     if (!product) {
       return sendError(res, "Product not found", 404);
     }
@@ -559,27 +594,27 @@ const getProductSales = async (req, res) => {
     // Get all order items for this product (only sales)
     const orderItems = await OrderItem.aggregate([
       {
-        $match: { product_id: new mongoose.Types.ObjectId(productId) }
+        $match: { product_id: new mongoose.Types.ObjectId(productId) },
       },
       {
         $lookup: {
           from: "orders",
           localField: "order_id",
           foreignField: "_id",
-          as: "order"
-        }
+          as: "order",
+        },
       },
       { $unwind: "$order" },
       {
-        $match: { "order.type": "sale" }
+        $match: { "order.type": "sale" },
       },
       {
         $lookup: {
           from: "suppliers",
           localField: "order.supplier_id",
           foreignField: "_id",
-          as: "supplier"
-        }
+          as: "supplier",
+        },
       },
       { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
       {
@@ -596,54 +631,55 @@ const getProductSales = async (req, res) => {
           discount: "$discount",
           total: "$total",
           retail_price: product.retail_price,
-          trade_price: product.trade_price
-        }
+          trade_price: product.trade_price,
+        },
       },
-      { $sort: { date: -1 } } // Sort only
+      { $sort: { date: -1 } }, // Sort only
     ]);
 
     // Calculate stock info
     const stockData = await Batch.aggregate([
       {
-        $match: { product_id: new mongoose.Types.ObjectId(productId) }
+        $match: { product_id: new mongoose.Types.ObjectId(productId) },
       },
       {
         $group: {
           _id: null,
           totalStock: { $sum: "$stock" },
-          productIn: { $sum: "$stock" }
-        }
-      }
+          productIn: { $sum: "$stock" },
+        },
+      },
     ]);
 
     const productOut = 0; // If needed, calculate from sales data
-    const stockInfo = stockData.length > 0 ? stockData[0] : {
-      totalStock: 0,
-      productIn: 0
-    };
+    const stockInfo =
+      stockData.length > 0
+        ? stockData[0]
+        : {
+            totalStock: 0,
+            productIn: 0,
+          };
 
     return successResponse(res, "Product sales fetched successfully", {
       sales: orderItems,
       stockInfo: {
         productIn: stockInfo.productIn,
         productOut,
-        totalStock: stockInfo.totalStock
+        totalStock: stockInfo.totalStock,
       },
       product: {
         _id: product._id,
         name: product.name,
         item_code: product.item_code,
         retail_price: product.retail_price,
-        trade_price: product.trade_price
-      }
+        trade_price: product.trade_price,
+      },
     });
-
   } catch (error) {
     console.error("Get sales by product error:", error);
     return sendError(res, "Failed to fetch product sales", 500);
   }
 };
-
 
 // Controller: get sale for return
 const getSaleForReturn = async (req, res) => {
@@ -664,7 +700,7 @@ const getSaleForReturn = async (req, res) => {
     if (invoice_number) {
       sales = await Order.findOne(filter)
         .populate("supplier_id") // attach customer info
-        .populate("booker_id")   // attach booker info if needed
+        .populate("booker_id") // attach booker info if needed
         .lean();
 
       if (!sales) {
@@ -675,7 +711,6 @@ const getSaleForReturn = async (req, res) => {
       sales.items = await OrderItemModel.find({ order_id: sales._id })
         .populate("product_id")
         .lean();
-
     } else {
       sales = await Order.find(filter)
         .populate("supplier_id")
@@ -700,7 +735,6 @@ const getSaleForReturn = async (req, res) => {
   }
 };
 
-
 const returnSaleByInvoice = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -714,14 +748,19 @@ const returnSaleByInvoice = async (req, res) => {
     }
 
     // Fetch original sale order
-    const saleOrder = await Order.findOne({ invoice_number, type: "sale" }).session(session);
+    const saleOrder = await Order.findOne({
+      invoice_number,
+      type: "sale",
+    }).session(session);
     if (!saleOrder) {
       await session.abortTransaction();
       return sendError(res, "Sale order not found", 404);
     }
 
     // Fetch customer
-    const customer = await Supplier.findById(saleOrder.supplier_id).session(session);
+    const customer = await Supplier.findById(saleOrder.supplier_id).session(
+      session
+    );
     if (!customer) {
       await session.abortTransaction();
       return sendError(res, "Customer not found", 404);
@@ -740,12 +779,20 @@ const returnSaleByInvoice = async (req, res) => {
 
       if (!orderItem) {
         await session.abortTransaction();
-        return sendError(res, `Order item not found for batch: ${item.batch}`, 404);
+        return sendError(
+          res,
+          `Order item not found for batch: ${item.batch}`,
+          404
+        );
       }
 
       if (orderItem.units < item.units) {
         await session.abortTransaction();
-        return sendError(res, `Return quantity exceeds sold units for batch: ${item.batch}`, 400);
+        return sendError(
+          res,
+          `Return quantity exceeds sold units for batch: ${item.batch}`,
+          400
+        );
       }
 
       // Calculate total for returned units proportionally
@@ -764,18 +811,23 @@ const returnSaleByInvoice = async (req, res) => {
     );
 
     // Create return sale order
-    const returnOrder = await Order.create([{
-      invoice_number: invoice_number + "-R",
-      supplier_id: customer._id,
-      booker_id: saleOrder.booker_id || null,
-      subtotal: totalReturn,
-      total: totalReturn,
-      paid_amount: 0,
-      due_amount: totalReturn,
-      net_value: totalReturn,
-      type: "sale_return",
-      status: "returned",
-    }], { session });
+    const returnOrder = await Order.create(
+      [
+        {
+          invoice_number: invoice_number + "-R",
+          supplier_id: customer._id,
+          booker_id: saleOrder.booker_id || null,
+          subtotal: totalReturn,
+          total: totalReturn,
+          paid_amount: 0,
+          due_amount: totalReturn,
+          net_value: totalReturn,
+          type: "sale_return",
+          status: "returned",
+        },
+      ],
+      { session }
+    );
 
     const returnItems = [];
     const batchUpdates = [];
@@ -789,16 +841,21 @@ const returnSaleByInvoice = async (req, res) => {
       await orderItem.save({ session });
 
       // Create return order item
-      const returnOrderItem = await OrderItem.create([{
-        order_id: returnOrder[0]._id,
-        product_id: item.product_id,
-        batch: item.batch,
-        expiry: item.expiry,
-        units: item.units,
-        unit_price: item.unit_price,
-        discount: item.discount || 0,
-        total: returnTotal,
-      }], { session });
+      const returnOrderItem = await OrderItem.create(
+        [
+          {
+            order_id: returnOrder[0]._id,
+            product_id: item.product_id,
+            batch: item.batch,
+            expiry: item.expiry,
+            units: item.units,
+            unit_price: item.unit_price,
+            discount: item.discount || 0,
+            total: returnTotal,
+          },
+        ],
+        { session }
+      );
 
       returnItems.push(returnOrderItem[0]);
 
@@ -815,11 +872,15 @@ const returnSaleByInvoice = async (req, res) => {
 
     await session.commitTransaction();
 
-    return successResponse(res, "Sale returned successfully", {
-      returnOrder: returnOrder[0],
-      items: returnItems,
-    }, 200);
-
+    return successResponse(
+      res,
+      "Sale returned successfully",
+      {
+        returnOrder: returnOrder[0],
+        items: returnItems,
+      },
+      200
+    );
   } catch (error) {
     await session.abortTransaction();
     console.error("Return sale error:", error);
@@ -828,7 +889,6 @@ const returnSaleByInvoice = async (req, res) => {
     session.endSession();
   }
 };
-
 
 // GET all sale returns with their items and totals
 export const getAllSaleReturns = async (req, res) => {
@@ -893,7 +953,10 @@ export const getAllSaleReturns = async (req, res) => {
       }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+      if (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth()
+      ) {
         totals.monthly.total += total;
         totals.monthly.count += 1;
       }
@@ -916,23 +979,26 @@ export const getAllSaleReturns = async (req, res) => {
   }
 };
 
-export const getLastTransactionBySupplierProductBatch = async (req, res) => {
+export const getLastTransactionByProduct = async (req, res) => {
   try {
-    const { supplierId, productId, batch } = req.query;
+    console.log("called");
+    const { productId } = req.query;
 
-    if (!supplierId && !productId && !batch) {
+    // Validate input
+    if (!productId) {
       return res.status(400).json({
         success: false,
-        message: "At least one of customerId, productId, or batch is required",
+        message: "productId is required",
       });
     }
 
-    const itemMatch = {};
-    if (productId) itemMatch.product_id = new mongoose.Types.ObjectId(productId);
-    if (batch) itemMatch.batch = batch;
+    // Match only the product
+    const itemMatch = {
+      product_id: new mongoose.Types.ObjectId(productId),
+    };
 
+    // Match only SALE orders
     const orderMatch = { type: "sale" };
-    if (supplierId) orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
@@ -952,7 +1018,9 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
                 as: "supplier",
               },
             },
-            { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
+            {
+              $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+            },
             {
               $project: {
                 invoice_number: 1,
@@ -972,13 +1040,13 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
-        message: "No previous SALE transaction found for the given filters",
+        message: "No previous SALE transaction found for this product",
       });
     }
 
     const item = lastItem[0];
 
-    // Calculate per-unit discount and percentage
+    // Calculate discount details
     const discountPerUnit = item.units ? item.discount / item.units : 0;
     const discountPercentage = item.unit_price
       ? (discountPerUnit / item.unit_price) * 100
@@ -991,9 +1059,9 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
       type: item.order.type,
       trade_price: item.unit_price,
       quantity: item.units,
-      discount_total: item.discount, // total discount
-      discount_per_unit: discountPerUnit, // per unit discount
-      discount_percentage: discountPercentage.toFixed(2), // % per unit
+      discount_total: item.discount,
+      discount_per_unit: discountPerUnit,
+      discount_percentage: discountPercentage.toFixed(2),
       batch: item.batch,
     };
 
@@ -1010,7 +1078,6 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
     });
   }
 };
-
 
 // Get sale by ID
 const getSaleById = async (req, res) => {
@@ -1042,13 +1109,14 @@ const getSaleById = async (req, res) => {
 
     saleOrder.items = items;
 
-    return successResponse(res, "Sale order retrieved successfully", { saleOrder });
+    return successResponse(res, "Sale order retrieved successfully", {
+      saleOrder,
+    });
   } catch (error) {
     console.error("Get sale by ID error:", error);
     return sendError(res, "Failed to fetch sale order");
   }
 };
-
 
 // Get all sales of a specific booker (employee)
 const getBookerSales = async (req, res) => {
@@ -1098,8 +1166,6 @@ const getBookerSales = async (req, res) => {
   }
 };
 
-
-
 // ✅ Add Recovery Controller
 export const addRecover = async (req, res) => {
   const session = await mongoose.startSession();
@@ -1107,10 +1173,14 @@ export const addRecover = async (req, res) => {
 
   try {
     const { orderId } = req.params;
-    const { recovery_amount, recovery_date } = req.body;
+    const { recovery_amount, recovery_date, recovered_by } = req.body; // ✅ include recovered_by
 
     if (!recovery_amount || recovery_amount <= 0) {
       return sendError(res, "Recovery amount must be greater than zero", 400);
+    }
+
+    if (!recovered_by) {
+      return sendError(res, "Recovered by user ID is required", 400);
     }
 
     // 🔹 Find the order
@@ -1122,7 +1192,11 @@ export const addRecover = async (req, res) => {
 
     if (order.due_amount < recovery_amount) {
       await session.abortTransaction();
-      return sendError(res, "Recovery amount cannot be greater than due amount", 400);
+      return sendError(
+        res,
+        "Recovery amount cannot be greater than due amount",
+        400
+      );
     }
 
     // 🔹 Find supplier
@@ -1136,12 +1210,12 @@ export const addRecover = async (req, res) => {
     order.due_amount = Number((order.due_amount - recovery_amount).toFixed(2));
     order.recovered_amount += recovery_amount;
     order.recovered_date = recovery_date || new Date();
+    order.recovered_by = recovered_by; // ✅ store the user ID who recovered
 
     if (order.due_amount <= 0) {
       order.due_amount = 0;
       order.status = "recovered";
     }
-
 
     await order.save({ session });
 
@@ -1159,9 +1233,9 @@ export const addRecover = async (req, res) => {
       recovery: {
         recovery_amount,
         recovery_date: recovery_date || new Date(),
+        recovered_by, // ✅ return user ID in response
       },
     });
-
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -1216,8 +1290,6 @@ const getAllBookersSales = async (req, res) => {
   }
 };
 
-
-
 const deleteSale = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1242,7 +1314,9 @@ const deleteSale = async (req, res) => {
     }
 
     // Restore stock (reverse sale)
-    const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
+    const orderItems = await OrderItem.find({ order_id: orderId }).session(
+      session
+    );
     for (const item of orderItems) {
       await Batch.updateOne(
         { product_id: item.product_id, batch_number: item.batch },
@@ -1252,9 +1326,20 @@ const deleteSale = async (req, res) => {
     }
 
     // Restore customer balance
-    const supplier = await Supplier.findById(order.supplier_id).session(session);
-    const { pay, receive } = adjustBalance(supplier, order.total, order.type, true);
-    await Supplier.findByIdAndUpdate(order.supplier_id, { pay, receive }, { session });
+    const supplier = await Supplier.findById(order.supplier_id).session(
+      session
+    );
+    const { pay, receive } = adjustBalance(
+      supplier,
+      order.total,
+      order.type,
+      true
+    );
+    await Supplier.findByIdAndUpdate(
+      order.supplier_id,
+      { pay, receive },
+      { session }
+    );
 
     // Delete order + items
     await OrderItem.deleteMany({ order_id: orderId }).session(session);
@@ -1271,7 +1356,6 @@ const deleteSale = async (req, res) => {
   }
 };
 
-
 // Export all like you mentioned
 const saleController = {
   createSale,
@@ -1286,7 +1370,7 @@ const saleController = {
   getBookerSales,
   getAllBookersSales,
   deleteSale,
-  getLastTransactionBySupplierProductBatch
+  getLastTransactionByProduct,
 };
 
 export default saleController;

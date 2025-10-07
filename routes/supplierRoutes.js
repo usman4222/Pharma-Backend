@@ -1,11 +1,7 @@
 import express from "express";
 import supplierController from "../controllers/supplierController.js";
-import { createUploader } from "../utils/upload.js";
 
 const router = express.Router();
-
-// Create uploader for "suppliers" folder
-const uploadSuppliers = createUploader("suppliers");
 
 router.get("/", supplierController.getAllSuppliers);
 router.get("/active", supplierController.getAllActiveSuppliers);

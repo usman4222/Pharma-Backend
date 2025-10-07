@@ -4,8 +4,16 @@ const orderSchema = new mongoose.Schema(
   {
     invoice_number: { type: String, required: true },
     purchase_number: { type: String },
-    supplier_id: { type: mongoose.Schema.Types.ObjectId, ref: "Supplier", default: null },
-    booker_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, },
+    supplier_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Supplier",
+      default: null,
+    },
+    booker_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     subtotal: { type: Number, required: true },
     total: { type: Number, required: true },
     paid_amount: { type: Number, required: true },
@@ -15,6 +23,9 @@ const orderSchema = new mongoose.Schema(
     net_value: { type: Number, required: true },
     recovered_amount: { type: Number, default: 0 },
     recovered_date: { type: Date, default: null },
+    recovered_amount: { type: Number, default: 0 },
+    recovered_date: { type: Date, default: null },
+    recovered_by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     note: { type: String },
     profit: { type: Number, default: 0 },
     type: {
