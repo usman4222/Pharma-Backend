@@ -1,6 +1,12 @@
 import { OrderModel as Order } from "../models/orderModel.js";
-import { OrderItemModel as OrderItem, OrderItemModel } from "../models/orderItemModel.js";
-import { SupplierModel as Supplier, SupplierModel } from "../models/supplierModel.js";
+import {
+  OrderItemModel as OrderItem,
+  OrderItemModel,
+} from "../models/orderItemModel.js";
+import {
+  SupplierModel as Supplier,
+  SupplierModel,
+} from "../models/supplierModel.js";
 import { BatchModel as Batch } from "../models/batchModel.js";
 import { ProductModel as Product } from "../models/productModel.js";
 import { User } from "../models/userModel.js";
@@ -25,47 +31,18 @@ const createPurchase = async (req, res) => {
       net_value,
       due_date,
       note,
-      items, // Array of order items
+      items = [],
       type = "purchase",
-      status,
+      status = "completed", // default: completed
     } = req.body;
 
-    // Validate required fields
-    const requiredFields = {
-      invoice_number,
-      supplier_id,
-      subtotal,
-      total,
-      paid_amount,
-      net_value,
-      items,
-    };
-
-    const missingFields = Object.entries(requiredFields)
-      .filter(
-        ([_, value]) =>
-          value === undefined ||
-          value === null ||
-          value === "" ||
-          (Array.isArray(value) && value.length === 0)
-      )
-      .map(([key]) => key);
-
-    if (missingFields.length > 0) {
-      await session.abortTransaction();
-      return sendError(
-        res,
-        `Missing required fields: ${missingFields.join(", ")}`,
-        400
-      );
-    }
-
+    // ✅ Validate type
     if (type !== "purchase") {
       await session.abortTransaction();
       return sendError(res, "Invalid order type", 400);
     }
 
-    // 🔹 Get supplier
+    // ✅ Check supplier always exists
     const supplierDoc = await SupplierModel.findById(supplier_id).session(
       session
     );
@@ -74,17 +51,39 @@ const createPurchase = async (req, res) => {
       return sendError(res, "Supplier not found", 404);
     }
 
-    // 🔹 Adjust supplier balance
-    const updatedPay = supplierDoc.pay || 0;
-    const updatedReceive = (supplierDoc.receive || 0) + (total - paid_amount);
+    // ✅ Strict validation only if completed
+    if (status === "completed") {
+      const requiredFields = {
+        invoice_number,
+        supplier_id,
+        subtotal,
+        total,
+        paid_amount,
+        net_value,
+        items,
+      };
 
-    await SupplierModel.findByIdAndUpdate(
-      supplier_id,
-      { pay: updatedPay, receive: updatedReceive },
-      { session }
-    );
+      const missingFields = Object.entries(requiredFields)
+        .filter(
+          ([_, value]) =>
+            value === undefined ||
+            value === null ||
+            value === "" ||
+            (Array.isArray(value) && value.length === 0)
+        )
+        .map(([key]) => key);
 
-    // 🔹 Create new order (⚡ FIX: wrap in array)
+      if (missingFields.length > 0) {
+        await session.abortTransaction();
+        return sendError(
+          res,
+          `Missing required fields: ${missingFields.join(", ")}`,
+          400
+        );
+      }
+    }
+
+    // ✅ Create the order record
     const [newOrder] = await Order.create(
       [
         {
@@ -105,26 +104,41 @@ const createPurchase = async (req, res) => {
       { session }
     );
 
-    // 🔹 Process order items and batches
+    // ✅ DRAFT MODE — skip everything else and return early
+    if (status === "skipped") {
+      await session.commitTransaction();
+      session.endSession();
+      return successResponse(
+        res,
+        "Draft saved successfully (no supplier or stock update)",
+        { order: newOrder },
+        201
+      );
+    }
+
+    // ✅ COMPLETED MODE — only this part runs
+    const updatedPay = supplierDoc.pay || 0;
+    const updatedReceive = (supplierDoc.receive || 0) + (total - paid_amount);
+
+    await SupplierModel.findByIdAndUpdate(
+      supplier_id,
+      { pay: updatedPay, receive: updatedReceive },
+      { session }
+    );
+
     const orderItems = [];
     const batchUpdates = [];
 
     for (const item of items) {
-      // Validate product exists
       const product = await Product.findById(item.product_id).session(session);
       if (!product) {
         await session.abortTransaction();
         return sendError(res, `Product not found: ${item.product_id}`, 404);
       }
 
-      // 🔹 Handle expiry as plain string
-      let expiryValue = null;
-      if (item.expiry) {
-        expiryValue = item.expiry; // keep string as-is ("MM/YY" or "MM/YYYY")
-      }
+      const expiryValue = item.expiry || null;
 
-
-      // 🔹 Create order item
+      // Create order item
       const [orderItem] = await OrderItem.create(
         [
           {
@@ -143,7 +157,7 @@ const createPurchase = async (req, res) => {
 
       orderItems.push(orderItem);
 
-      // 🔹 Prepare batch update
+      // Batch stock updates
       batchUpdates.push({
         updateOne: {
           filter: { product_id: item.product_id, batch_number: item.batch },
@@ -151,12 +165,13 @@ const createPurchase = async (req, res) => {
             $setOnInsert: {
               product_id: item.product_id,
               batch_number: item.batch,
-              purchase_price: item.unit_price, // original unit price before discount
+              purchase_price: item.unit_price,
               expiry_date: expiryValue,
             },
             $set: {
-              unit_cost: item.total / item.units, //  final cost per unit after discount
-              discount_per_unit: item.units > 0 ? (item.discount || 0) / item.units : 0,
+              unit_cost: item.total / item.units,
+              discount_per_unit:
+                item.units > 0 ? (item.discount || 0) / item.units : 0,
             },
             $inc: { stock: item.units },
           },
@@ -165,8 +180,6 @@ const createPurchase = async (req, res) => {
       });
     }
 
-
-    // Bulk update batches
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
@@ -182,13 +195,11 @@ const createPurchase = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     console.error("Purchase error:", error);
-    return sendError(res, error.message);
+    return sendError(res, error.message || "Something went wrong");
   } finally {
     session.endSession();
   }
 };
-
-
 
 // Get all purchases by supplier ID
 const getPurchasesBySupplier = async (req, res) => {
@@ -202,7 +213,10 @@ const getPurchasesBySupplier = async (req, res) => {
     }
 
     // Get all purchases (no pagination)
-    const purchases = await Order.find({ supplier_id: supplierId, type: "purchase" })
+    const purchases = await Order.find({
+      supplier_id: supplierId,
+      type: "purchase",
+    })
       .populate("supplier_id", "name")
       .sort({ createdAt: -1 });
 
@@ -222,12 +236,14 @@ const getPurchasesBySupplier = async (req, res) => {
   }
 };
 
-
 const getAllPurchases = async (req, res) => {
   try {
     // Fetch purchases with supplier populated
     const purchases = await Order.find({ type: "purchase" })
-      .populate("supplier_id", "company_name role address city phone_number pay receive")
+      .populate(
+        "supplier_id",
+        "company_name role address city phone_number pay receive"
+      )
       .sort({ createdAt: -1 })
       .lean();
 
@@ -240,8 +256,8 @@ const getAllPurchases = async (req, res) => {
         populate: {
           path: "pack_size_id",
           model: "PackSize",
-          select: "name"
-        }
+          select: "name",
+        },
       })
       .lean();
 
@@ -293,7 +309,10 @@ const getAllPurchases = async (req, res) => {
       }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+      if (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth()
+      ) {
         totals.monthly.total += total;
         totals.monthly.count += 1;
       }
@@ -310,13 +329,11 @@ const getAllPurchases = async (req, res) => {
       totals,
       totalItems: purchases.length,
     });
-
   } catch (error) {
     console.error("Get all purchase orders error:", error);
     return sendError(res, "Failed to fetch purchase orders");
   }
 };
-
 
 // Get all purchases for a specific product
 const getProductPurchases = async (req, res) => {
@@ -324,8 +341,9 @@ const getProductPurchases = async (req, res) => {
     const { productId } = req.params;
 
     // Check if product exists and get product prices
-    const product = await Product.findById(productId)
-      .select("name item_code retail_price trade_price");
+    const product = await Product.findById(productId).select(
+      "name item_code retail_price trade_price"
+    );
     if (!product) {
       return sendError(res, "Product not found", 404);
     }
@@ -333,27 +351,27 @@ const getProductPurchases = async (req, res) => {
     // Get order items with necessary data (no skip/limit)
     const orderItems = await OrderItem.aggregate([
       {
-        $match: { product_id: new mongoose.Types.ObjectId(productId) }
+        $match: { product_id: new mongoose.Types.ObjectId(productId) },
       },
       {
         $lookup: {
           from: "orders",
           localField: "order_id",
           foreignField: "_id",
-          as: "order"
-        }
+          as: "order",
+        },
       },
       { $unwind: "$order" },
       {
-        $match: { "order.type": "purchase" }
+        $match: { "order.type": "purchase" },
       },
       {
         $lookup: {
           from: "suppliers",
           localField: "order.supplier_id",
           foreignField: "_id",
-          as: "supplier"
-        }
+          as: "supplier",
+        },
       },
       { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
       {
@@ -370,55 +388,56 @@ const getProductPurchases = async (req, res) => {
           discount: "$discount",
           total: "$total",
           retail_price: product.retail_price,
-          trade_price: product.trade_price
-        }
+          trade_price: product.trade_price,
+        },
       },
-      { $sort: { date: -1 } }
+      { $sort: { date: -1 } },
     ]);
 
     // Calculate product in/out and total stock
     const stockData = await Batch.aggregate([
       {
-        $match: { product_id: new mongoose.Types.ObjectId(productId) }
+        $match: { product_id: new mongoose.Types.ObjectId(productId) },
       },
       {
         $group: {
           _id: null,
           totalStock: { $sum: "$stock" },
-          productIn: { $sum: "$stock" } // For purchases, product in = stock
-        }
-      }
+          productIn: { $sum: "$stock" }, // For purchases, product in = stock
+        },
+      },
     ]);
 
     const productOut = 0; // Would need sales data to calculate this
-    const stockInfo = stockData.length > 0 ? stockData[0] : {
-      totalStock: 0,
-      productIn: 0
-    };
+    const stockInfo =
+      stockData.length > 0
+        ? stockData[0]
+        : {
+            totalStock: 0,
+            productIn: 0,
+          };
 
     return successResponse(res, "Product purchases fetched successfully", {
       purchases: orderItems,
       stockInfo: {
         productIn: stockInfo.productIn,
         productOut,
-        totalStock: stockInfo.totalStock
+        totalStock: stockInfo.totalStock,
       },
       product: {
         _id: product._id,
         name: product.name,
         item_code: product.item_code,
         retail_price: product.retail_price,
-        trade_price: product.trade_price
+        trade_price: product.trade_price,
       },
-      totalItems: orderItems.length
+      totalItems: orderItems.length,
     });
-
   } catch (error) {
     console.error("Get purchases by product error:", error);
     return sendError(res, "Failed to fetch product purchases");
   }
 };
-
 
 const getPurchaseForReturn = async (req, res) => {
   try {
@@ -448,7 +467,6 @@ const getPurchaseForReturn = async (req, res) => {
       purchases.items = await OrderItemModel.find({ order_id: purchases._id })
         .populate("product_id")
         .lean();
-
     } else {
       purchases = await Order.find(filter)
         .populate("supplier_id") // ✅ attach supplier info
@@ -472,7 +490,6 @@ const getPurchaseForReturn = async (req, res) => {
   }
 };
 
-
 const returnPurchaseByInvoice = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -486,13 +503,18 @@ const returnPurchaseByInvoice = async (req, res) => {
     }
 
     // Fetch original purchase order
-    const purchaseOrder = await Order.findOne({ invoice_number, type: "purchase" }).session(session);
+    const purchaseOrder = await Order.findOne({
+      invoice_number,
+      type: "purchase",
+    }).session(session);
     if (!purchaseOrder) {
       await session.abortTransaction();
       return sendError(res, "Purchase order not found", 404);
     }
 
-    const supplierDoc = await SupplierModel.findById(purchaseOrder.supplier_id).session(session);
+    const supplierDoc = await SupplierModel.findById(
+      purchaseOrder.supplier_id
+    ).session(session);
     if (!supplierDoc) {
       await session.abortTransaction();
       return sendError(res, "Supplier not found", 404);
@@ -511,16 +533,24 @@ const returnPurchaseByInvoice = async (req, res) => {
 
       if (!orderItem) {
         await session.abortTransaction();
-        return sendError(res, `Order item not found for batch: ${item.batch}`, 404);
+        return sendError(
+          res,
+          `Order item not found for batch: ${item.batch}`,
+          404
+        );
       }
 
       if (orderItem.units < item.units) {
         await session.abortTransaction();
-        return sendError(res, `Return quantity exceeds purchased units for batch: ${item.batch}`, 400);
+        return sendError(
+          res,
+          `Return quantity exceeds purchased units for batch: ${item.batch}`,
+          400
+        );
       }
 
       // Calculate total for returned units proportionally
-      const unitTotal = orderItem.total / (orderItem.units); // total per unit including tax
+      const unitTotal = orderItem.total / orderItem.units; // total per unit including tax
       const returnTotal = unitTotal * item.units;
       totalReturn += returnTotal;
 
@@ -530,22 +560,29 @@ const returnPurchaseByInvoice = async (req, res) => {
 
     // Deduct from supplier credit
     const newReceive = Math.max((supplierDoc.receive || 0) - totalReturn, 0);
-    await SupplierModel.findByIdAndUpdate(supplierDoc._id, { receive: newReceive }, { session });
+    await SupplierModel.findByIdAndUpdate(
+      supplierDoc._id,
+      { receive: newReceive },
+      { session }
+    );
 
     // Create return order
-    const returnOrder = await Order.create([
-      {
-        invoice_number: invoice_number + "-R",
-        supplier_id: supplierDoc._id,
-        subtotal: totalReturn,
-        total: totalReturn,
-        paid_amount: 0,
-        due_amount: totalReturn,
-        net_value: totalReturn,
-        type: "purchase_return",
-        status: "returned",
-      },
-    ], { session });
+    const returnOrder = await Order.create(
+      [
+        {
+          invoice_number: invoice_number + "-R",
+          supplier_id: supplierDoc._id,
+          subtotal: totalReturn,
+          total: totalReturn,
+          paid_amount: 0,
+          due_amount: totalReturn,
+          net_value: totalReturn,
+          type: "purchase_return",
+          status: "returned",
+        },
+      ],
+      { session }
+    );
 
     const returnItems = [];
     const batchUpdates = [];
@@ -559,18 +596,21 @@ const returnPurchaseByInvoice = async (req, res) => {
       await orderItem.save({ session });
 
       // Create return order item
-      const returnOrderItem = await OrderItem.create([
-        {
-          order_id: returnOrder[0]._id,
-          product_id: item.product_id,
-          batch: item.batch,
-          expiry: item.expiry,
-          units: item.units,
-          unit_price: orderItem.unit_price,
-          discount: item.discount || 0,
-          total: returnTotal,
-        },
-      ], { session });
+      const returnOrderItem = await OrderItem.create(
+        [
+          {
+            order_id: returnOrder[0]._id,
+            product_id: item.product_id,
+            batch: item.batch,
+            expiry: item.expiry,
+            units: item.units,
+            unit_price: orderItem.unit_price,
+            discount: item.discount || 0,
+            total: returnTotal,
+          },
+        ],
+        { session }
+      );
 
       returnItems.push(returnOrderItem[0]);
 
@@ -587,11 +627,15 @@ const returnPurchaseByInvoice = async (req, res) => {
 
     await session.commitTransaction();
 
-    return successResponse(res, "Purchase returned successfully", {
-      returnOrder: returnOrder[0],
-      items: returnItems,
-    }, 200);
-
+    return successResponse(
+      res,
+      "Purchase returned successfully",
+      {
+        returnOrder: returnOrder[0],
+        items: returnItems,
+      },
+      200
+    );
   } catch (error) {
     await session.abortTransaction();
     console.error("Return purchase error:", error);
@@ -611,7 +655,9 @@ const getAllPurchaseReturns = async (req, res) => {
 
     // Get all return order items
     const returnOrderIds = returnOrders.map((order) => order._id);
-    const returnItems = await OrderItem.find({ order_id: { $in: returnOrderIds } })
+    const returnItems = await OrderItem.find({
+      order_id: { $in: returnOrderIds },
+    })
       .populate("product_id", "name category unit")
       .lean();
 
@@ -664,7 +710,10 @@ const getAllPurchaseReturns = async (req, res) => {
       }
 
       // Monthly
-      if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+      if (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth()
+      ) {
         totals.monthly.total += total;
         totals.monthly.count += 1;
       }
@@ -681,31 +730,31 @@ const getAllPurchaseReturns = async (req, res) => {
       totals,
       totalItems: returnOrders.length,
     });
-
   } catch (error) {
     console.error("Get all purchase returns error:", error);
     return sendError(res, "Failed to fetch purchase returns");
   }
 };
 
-
-export const getLastTransactionBySupplierProductBatch = async (req, res) => {
+export const getLastTransactionByProduct = async (req, res) => {
   try {
-    const { supplierId, productId, batch } = req.query;
+    const { productId } = req.query;
 
-    if (!supplierId && !productId && !batch) {
+    // Validate input
+    if (!productId) {
       return res.status(400).json({
         success: false,
-        message: "At least one of supplierId, productId, or batch is required",
+        message: "productId is required",
       });
     }
 
-    const itemMatch = {};
-    if (productId) itemMatch.product_id = new mongoose.Types.ObjectId(productId);
-    if (batch) itemMatch.batch = batch;
+    // Match only the product
+    const itemMatch = {
+      product_id: new mongoose.Types.ObjectId(productId),
+    };
 
-    const orderMatch = { type: "purchase" };
-    if (supplierId) orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
+    // Match only SALE orders
+    const orderMatch = { type: "sale" };
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
@@ -725,7 +774,9 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
                 as: "supplier",
               },
             },
-            { $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true } },
+            {
+              $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+            },
             {
               $project: {
                 invoice_number: 1,
@@ -745,13 +796,13 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
-        message: "No previous PURCHASE transaction found for the given filters",
+        message: "No previous SALE transaction found for this product",
       });
     }
 
     const item = lastItem[0];
 
-    // Calculate per-unit discount and percentage
+    // Calculate discount details
     const discountPerUnit = item.units ? item.discount / item.units : 0;
     const discountPercentage = item.unit_price
       ? (discountPerUnit / item.unit_price) * 100
@@ -764,9 +815,9 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
       type: item.order.type,
       trade_price: item.unit_price,
       quantity: item.units,
-      discount_total: item.discount, // total discount
-      discount_per_unit: discountPerUnit, // per unit discount
-      discount_percentage: discountPercentage.toFixed(2), // % per unit
+      discount_total: item.discount,
+      discount_per_unit: discountPerUnit,
+      discount_percentage: discountPercentage.toFixed(2),
       batch: item.batch,
     };
 
@@ -783,7 +834,6 @@ export const getLastTransactionBySupplierProductBatch = async (req, res) => {
     });
   }
 };
-
 
 // Get purchase by ID
 const getPurchaseById = async (req, res) => {
@@ -822,7 +872,6 @@ const getPurchaseById = async (req, res) => {
   }
 };
 
-
 // Edit purchase
 const editPurchase = async (req, res) => {
   const session = await mongoose.startSession();
@@ -848,7 +897,9 @@ const editPurchase = async (req, res) => {
     }
 
     // Reverse old stock changes
-    const oldItems = await OrderItem.find({ order_id: orderId }).session(session);
+    const oldItems = await OrderItem.find({ order_id: orderId }).session(
+      session
+    );
     for (const item of oldItems) {
       await Batch.findOneAndUpdate(
         { product_id: item.product_id, batch_number: item.batch },
@@ -936,7 +987,8 @@ const editPurchase = async (req, res) => {
               },
               $set: {
                 unit_cost: item.units > 0 ? item.total / item.units : 0,
-                discount_per_unit: item.units > 0 ? (item.discount || 0) / item.units : 0,
+                discount_per_unit:
+                  item.units > 0 ? (item.discount || 0) / item.units : 0,
               },
               $inc: { stock: item.units },
             },
@@ -965,10 +1017,6 @@ const editPurchase = async (req, res) => {
   }
 };
 
-
-
-
-
 const deletePurchase = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -993,7 +1041,9 @@ const deletePurchase = async (req, res) => {
     }
 
     // Restore stock (reverse purchase)
-    const orderItems = await OrderItem.find({ order_id: orderId }).session(session);
+    const orderItems = await OrderItem.find({ order_id: orderId }).session(
+      session
+    );
     for (const item of orderItems) {
       const batchUpdate = await Batch.findOneAndUpdate(
         { product_id: item.product_id, batch_number: item.batch },
@@ -1007,9 +1057,20 @@ const deletePurchase = async (req, res) => {
     }
 
     // Restore supplier balance
-    const supplier = await Supplier.findById(order.supplier_id).session(session);
-    const { pay, receive } = adjustBalance(supplier, order.total, order.type, true);
-    await Supplier.findByIdAndUpdate(order.supplier_id, { pay, receive }, { session });
+    const supplier = await Supplier.findById(order.supplier_id).session(
+      session
+    );
+    const { pay, receive } = adjustBalance(
+      supplier,
+      order.total,
+      order.type,
+      true
+    );
+    await Supplier.findByIdAndUpdate(
+      order.supplier_id,
+      { pay, receive },
+      { session }
+    );
 
     // Delete order + items
     await OrderItem.deleteMany({ order_id: orderId }).session(session);
@@ -1037,8 +1098,7 @@ const purchaseController = {
   getPurchaseById,
   editPurchase,
   deletePurchase,
-  getLastTransactionBySupplierProductBatch
+  getLastTransactionByProduct,
 };
-
 
 export default purchaseController;

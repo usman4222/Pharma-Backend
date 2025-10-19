@@ -30,6 +30,7 @@ const createSale = async (req, res) => {
       note,
       items,
       type = "sale",
+      status = "completed",
     } = req.body;
 
     console.log("req.body", req.body);
@@ -135,23 +136,20 @@ const createSale = async (req, res) => {
       net_value,
       note,
       due_date,
+      status,
       type,
       profit: 0,
     };
 
-    if (paid_amount >= total) {
-      orderData.status = "recovered";
-      orderData.recovered_amount = paid_amount;
-      orderData.recovered_date = new Date();
-    } else if (paid_amount > 0) {
-      orderData.status = "completed";
-      orderData.recovered_amount = paid_amount;
-      orderData.recovered_date = new Date();
-    } else {
-      orderData.status = "completed";
-      orderData.recovered_amount = 0;
-      orderData.recovered_date = null;
-    }
+    // if (paid_amount >= total) {
+    //   orderData.status = "recovered";
+    //   orderData.recovered_amount = paid_amount;
+    //   orderData.recovered_date = new Date();
+    // } else {
+    //   // Do not mark as completed or skipped
+    //   orderData.recovered_amount = paid_amount || 0;
+    //   orderData.recovered_date = null;
+    // }
 
     const newOrder = await Order.create([orderData], { session });
     if (!newOrder?.length) {
@@ -1200,7 +1198,9 @@ export const addRecover = async (req, res) => {
     }
 
     // 🔹 Find supplier
-    const supplier = await Supplier.findById(order.supplier_id).session(session);
+    const supplier = await Supplier.findById(order.supplier_id).session(
+      session
+    );
     if (!supplier) {
       await session.abortTransaction();
       return sendError(res, "Supplier not found", 404);
@@ -1242,7 +1242,6 @@ export const addRecover = async (req, res) => {
     return sendError(res, "Failed to add recovery", error);
   }
 };
-
 
 // Get all sales with pagination (only with valid booker_id)
 const getAllBookersSales = async (req, res) => {

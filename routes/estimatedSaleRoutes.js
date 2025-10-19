@@ -8,6 +8,6 @@ router.post("/", estimatedSaleController.createEstimatedSale);
 router.get("/", estimatedSaleController.getAllEstimatedSales); 
 router.delete("/:orderId", estimatedSaleController.deleteEstimatedSale); 
 router.get("/:orderId", estimatedSaleController.getEstimatedSaleById);
-router.get("/update/:orderId", estimatedSaleController.updateEstimatedSale);
+router.put("/update/:orderId", estimatedSaleController.updateEstimatedSale);
 
 export default router;
