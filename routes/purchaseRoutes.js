@@ -6,6 +6,9 @@ const router = express.Router();
 // 📥 Create purchase
 router.post("/", purchaseController.createPurchase);
 
+// 📥 Complete a skipped purchase (status -> completed)
+router.patch("/:orderId/complete", purchaseController.completePurchase); 
+
 // 📥 Return purchase by invoice
 router.post("/return", purchaseController.returnPurchaseByInvoice);
 

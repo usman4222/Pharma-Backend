@@ -33,7 +33,7 @@ const createPurchase = async (req, res) => {
       note,
       items = [],
       type = "purchase",
-      status = "completed", // default: completed
+      status = "completed", // can be "completed" or "skipped"
     } = req.body;
 
     // ✅ Validate type
@@ -42,7 +42,7 @@ const createPurchase = async (req, res) => {
       return sendError(res, "Invalid order type", 400);
     }
 
-    // ✅ Check supplier always exists
+    // ✅ Supplier validation
     const supplierDoc = await SupplierModel.findById(supplier_id).session(
       session
     );
@@ -51,7 +51,7 @@ const createPurchase = async (req, res) => {
       return sendError(res, "Supplier not found", 404);
     }
 
-    // ✅ Strict validation only if completed
+    // ✅ Required field validation only for completed orders
     if (status === "completed") {
       const requiredFields = {
         invoice_number,
@@ -83,7 +83,7 @@ const createPurchase = async (req, res) => {
       }
     }
 
-    // ✅ Create the order record
+    // ✅ Create purchase order (always saved)
     const [newOrder] = await Order.create(
       [
         {
@@ -104,19 +104,40 @@ const createPurchase = async (req, res) => {
       { session }
     );
 
-    // ✅ DRAFT MODE — skip everything else and return early
+    // ✅ Always create order items (even in draft)
+    const orderItems = [];
+    for (const item of items) {
+      const [orderItem] = await OrderItem.create(
+        [
+          {
+            order_id: newOrder._id,
+            product_id: item.product_id,
+            batch: item.batch,
+            expiry: item.expiry || null,
+            units: item.units,
+            unit_price: item.unit_price,
+            discount: item.discount || 0,
+            total: item.total,
+          },
+        ],
+        { session }
+      );
+      orderItems.push(orderItem);
+    }
+
+    // ✅ If draft: no supplier or batch stock updates
     if (status === "skipped") {
       await session.commitTransaction();
       session.endSession();
       return successResponse(
         res,
-        "Draft saved successfully (no supplier or stock update)",
-        { order: newOrder },
+        "Draft saved successfully (ready for completion later)",
+        { order: newOrder, items: orderItems },
         201
       );
     }
 
-    // ✅ COMPLETED MODE — only this part runs
+    // ✅ Completed order: update supplier balances and stock
     const updatedPay = supplierDoc.pay || 0;
     const updatedReceive = (supplierDoc.receive || 0) + (total - paid_amount);
 
@@ -126,9 +147,7 @@ const createPurchase = async (req, res) => {
       { session }
     );
 
-    const orderItems = [];
     const batchUpdates = [];
-
     for (const item of items) {
       const product = await Product.findById(item.product_id).session(session);
       if (!product) {
@@ -138,26 +157,6 @@ const createPurchase = async (req, res) => {
 
       const expiryValue = item.expiry || null;
 
-      // Create order item
-      const [orderItem] = await OrderItem.create(
-        [
-          {
-            order_id: newOrder._id,
-            product_id: item.product_id,
-            batch: item.batch,
-            expiry: expiryValue,
-            units: item.units,
-            unit_price: item.unit_price,
-            discount: item.discount || 0,
-            total: item.total,
-          },
-        ],
-        { session }
-      );
-
-      orderItems.push(orderItem);
-
-      // Batch stock updates
       batchUpdates.push({
         updateOne: {
           filter: { product_id: item.product_id, batch_number: item.batch },
@@ -184,6 +183,7 @@ const createPurchase = async (req, res) => {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
+    // ✅ Commit transaction for completed purchase
     await session.commitTransaction();
 
     return successResponse(
@@ -844,6 +844,7 @@ const getPurchaseById = async (req, res) => {
       return sendError(res, "Invalid order ID", 400);
     }
 
+    // Fetch the main order
     const order = await Order.findById(orderId)
       .populate("supplier_id", "name company_name pay receive")
       .lean();
@@ -852,15 +853,36 @@ const getPurchaseById = async (req, res) => {
       return sendError(res, "Purchase not found", 404);
     }
 
-    // Fetch order items with product details
+    // Fetch related items with nested product details
     const items = await OrderItem.find({ order_id: orderId })
-      .populate("product_id", "name item_code retail_price trade_price")
+      .populate({
+        path: "product_id",
+        select:
+          "name item_code retail_price trade_price sales_tax sales_tax_percentage pack_size_id",
+        populate: {
+          path: "pack_size_id",
+          model: "PackSize",
+          select: "name",
+        },
+      })
       .lean();
 
-    // ✅ Merge order + items into one object
+    // ✅ Format and flatten item data
+    const formattedItems = items.map((item) => ({
+      ...item,
+      product_name: item.product_id?.name || "",
+      item_code: item.product_id?.item_code || "",
+      retail_price: item.product_id?.retail_price || 0,
+      trade_price: item.product_id?.trade_price || 0,
+      sales_tax: item.product_id?.sales_tax || 0,
+      sales_tax_percentage: item.product_id?.sales_tax_percentage || 0,
+      pack_size: item.product_id?.pack_size_id?.name || "",
+    }));
+
+    // ✅ Combine into a single purchase object
     const purchase = {
       ...order,
-      items,
+      items: formattedItems,
     };
 
     return successResponse(res, "Single Purchase fetched successfully", {
@@ -880,11 +902,13 @@ const editPurchase = async (req, res) => {
   try {
     const { orderId } = req.params;
 
+    // 🔸 Validate order ID
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
       await session.abortTransaction();
       return sendError(res, "Invalid order ID", 400);
     }
 
+    // 🔸 Fetch existing order
     const order = await Order.findById(orderId).session(session);
     if (!order) {
       await session.abortTransaction();
@@ -896,7 +920,7 @@ const editPurchase = async (req, res) => {
       return sendError(res, "Not a purchase order", 400);
     }
 
-    // Reverse old stock changes
+    // 🔹 Reverse old stock
     const oldItems = await OrderItem.find({ order_id: orderId }).session(
       session
     );
@@ -908,54 +932,65 @@ const editPurchase = async (req, res) => {
       );
     }
 
-    // Delete old items
+    // 🔹 Delete old items
     await OrderItem.deleteMany({ order_id: orderId }).session(session);
 
-    // Handle supplier balance updates
+    // 🧾 Supplier balance update (based on due amount)
     const oldSupplierId = order.supplier_id;
     const newSupplierId = req.body.supplier_id ?? oldSupplierId;
-    const oldTotal = order.total || 0;
-    const newTotal = req.body.total ?? oldTotal;
+
+    const oldDue = Number(order.due_amount) || 0;
+    const newDue = Number(req.body.due_amount) || oldDue;
+    const dueDiff = newDue - oldDue;
+
+    console.log("📊 Supplier balance update section:");
+    console.log("Old Supplier ID:", oldSupplierId?.toString());
+    console.log("New Supplier ID:", newSupplierId?.toString());
+    console.log("Old Due Amount:", oldDue);
+    console.log("New Due Amount:", newDue);
+    console.log("💰 Due Difference (affects supplier balance):", dueDiff);
 
     if (oldSupplierId.toString() !== newSupplierId.toString()) {
-      // Reverse old supplier balance
+      // 🔁 Supplier changed: reverse old due and add new one
       if (oldSupplierId) {
         await SupplierModel.findByIdAndUpdate(
           oldSupplierId,
-          { $inc: { receive: -oldTotal } },
+          { $inc: { receive: dueDiff } },
           { session }
         );
+        console.log(`↩️ Reversed old supplier balance by: -${oldDue}`);
       }
 
-      // Apply balance to new supplier
       if (newSupplierId) {
         await SupplierModel.findByIdAndUpdate(
           newSupplierId,
-          { $inc: { receive: newTotal } },
+          { $inc: { receive: newDue } },
           { session }
         );
+        console.log(`➕ Added new supplier balance by: +${newDue}`);
       }
     } else {
-      // Same supplier, adjust by difference
-      const balanceDiff = newTotal - oldTotal;
+      // 🧾 Same supplier → adjust by due difference
       await SupplierModel.findByIdAndUpdate(
         oldSupplierId,
-        { $inc: { receive: balanceDiff } },
+        { $inc: { receive: dueDiff } },
         { session }
       );
+      console.log(`🔄 Adjusted same supplier balance by: ${dueDiff}`);
     }
 
-    // Update order with all fields from req.body
+    // 🔹 Update order details
     Object.keys(req.body).forEach((key) => {
       order[key] = req.body[key];
     });
-    order.supplier_id = newSupplierId; // ensure supplier is updated
+    order.supplier_id = newSupplierId;
     await order.save({ session });
 
-    // Add new items and update batches
+    // 🔹 Recreate order items and update batches
     const newItems = [];
-    if (req.body.items && Array.isArray(req.body.items)) {
+    if (Array.isArray(req.body.items)) {
       const batchUpdates = [];
+
       for (const item of req.body.items) {
         const newItem = await OrderItem.create(
           [
@@ -997,12 +1032,16 @@ const editPurchase = async (req, res) => {
         });
       }
 
-      if (batchUpdates.length) {
+      if (batchUpdates.length > 0) {
         await Batch.bulkWrite(batchUpdates, { session });
       }
     }
 
     await session.commitTransaction();
+
+    console.log(
+      "✅ Purchase edited successfully (due-based supplier balance updated)."
+    );
 
     return successResponse(res, "Purchase updated successfully", {
       order,
@@ -1010,7 +1049,7 @@ const editPurchase = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
-    console.error("Edit purchase error:", error);
+    console.error("❌ Edit purchase error:", error);
     return sendError(res, "Failed to edit purchase");
   } finally {
     session.endSession();
@@ -1087,6 +1126,192 @@ const deletePurchase = async (req, res) => {
   }
 };
 
+// PATCH /purchases/:orderId/complete
+export const completePurchase = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const {
+      invoice_number,
+      subtotal,
+      total,
+      paid_amount,
+      due_amount,
+      net_value,
+      due_date,
+      note,
+      items = [],
+    } = req.body;
+
+    // 1) Load order (must exist, must be type=purchase, status=skipped)
+    const order = await Order.findById(req.params.orderId).session(session);
+    if (!order) {
+      await session.abortTransaction();
+      return sendError(res, "Order not found", 404);
+    }
+    if (order.type !== "purchase") {
+      await session.abortTransaction();
+      return sendError(res, "Invalid order type", 400);
+    }
+    if (order.status !== "skipped") {
+      await session.abortTransaction();
+      return sendError(res, "Only skipped orders can be completed", 400);
+    }
+
+    // 2) Supplier must exist
+    const supplierDoc = await SupplierModel.findById(order.supplier_id).session(
+      session
+    );
+    if (!supplierDoc) {
+      await session.abortTransaction();
+      return sendError(res, "Supplier not found", 404);
+    }
+
+    // 3) Validate required fields
+    const requiredFields = {
+      invoice_number: invoice_number ?? order.invoice_number,
+      supplier_id: order.supplier_id,
+      subtotal: subtotal ?? order.subtotal,
+      total: total ?? order.total,
+      paid_amount: paid_amount ?? order.paid_amount,
+      net_value: net_value ?? order.net_value,
+    };
+    const missing = Object.entries(requiredFields)
+      .filter(
+        ([_, v]) =>
+          v === undefined ||
+          v === null ||
+          v === "" ||
+          (Array.isArray(v) && v.length === 0)
+      )
+      .map(([k]) => k);
+    if (missing.length) {
+      await session.abortTransaction();
+      return sendError(
+        res,
+        `Missing required fields: ${missing.join(", ")}`,
+        400
+      );
+    }
+
+    // 4) Persist "completed" fields onto order and flip status
+    order.invoice_number = invoice_number ?? order.invoice_number;
+    order.subtotal = subtotal ?? order.subtotal;
+    order.total = total ?? order.total;
+    order.paid_amount = paid_amount ?? order.paid_amount;
+    order.due_amount = due_amount ?? order.due_amount;
+    order.net_value = net_value ?? order.net_value;
+    order.note = note ?? order.note;
+    order.due_date = due_date ?? order.due_date;
+    order.status = "completed";
+    await order.save({ session });
+
+    // 5) Supplier balances
+    const updatedPay = supplierDoc.pay || 0;
+    const completedTotal = order.total;
+    const completedPaid = order.paid_amount || 0;
+    const updatedReceive =
+      (supplierDoc.receive || 0) + (completedTotal - completedPaid);
+    await SupplierModel.findByIdAndUpdate(
+      order.supplier_id,
+      { pay: updatedPay, receive: updatedReceive },
+      { session }
+    );
+
+    // 6) Upsert order items + batch stock updates
+    const orderItems = [];
+    const batchUpdates = [];
+
+    for (const item of items) {
+      const product = await Product.findById(item.product_id).session(session);
+      if (!product) {
+        await session.abortTransaction();
+        return sendError(res, `Product not found: ${item.product_id}`, 404);
+      }
+
+      const expiryValue = item.expiry || null;
+
+      // Try to find existing item (from draft)
+      let orderItem = await OrderItem.findOne({
+        order_id: order._id,
+        product_id: item.product_id,
+        batch: item.batch,
+      }).session(session);
+
+      if (orderItem) {
+        // Update existing item
+        orderItem.units = item.units;
+        orderItem.unit_price = item.unit_price;
+        orderItem.discount = item.discount || 0;
+        orderItem.total = item.total;
+        orderItem.expiry = expiryValue;
+        await orderItem.save({ session });
+      } else {
+        // Insert new item
+        [orderItem] = await OrderItem.create(
+          [
+            {
+              order_id: order._id,
+              product_id: item.product_id,
+              batch: item.batch,
+              expiry: expiryValue,
+              units: item.units,
+              unit_price: item.unit_price,
+              discount: item.discount || 0,
+              total: item.total,
+            },
+          ],
+          { session }
+        );
+      }
+
+      orderItems.push(orderItem);
+
+      // Batch stock updates
+      batchUpdates.push({
+        updateOne: {
+          filter: { product_id: item.product_id, batch_number: item.batch },
+          update: {
+            $setOnInsert: {
+              product_id: item.product_id,
+              batch_number: item.batch,
+              purchase_price: item.unit_price,
+              expiry_date: expiryValue,
+            },
+            $set: {
+              unit_cost: item.units > 0 ? item.total / item.units : 0,
+              discount_per_unit:
+                item.units > 0 ? (item.discount || 0) / item.units : 0,
+            },
+            $inc: { stock: item.units },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    if (batchUpdates.length) {
+      await Batch.bulkWrite(batchUpdates, { session });
+    }
+
+    await session.commitTransaction();
+
+    return successResponse(
+      res,
+      "Purchase order completed successfully",
+      { order, items: orderItems },
+      200
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    console.error("Complete purchase error:", err);
+    return sendError(res, err.message || "Something went wrong");
+  } finally {
+    session.endSession();
+  }
+};
+
 const purchaseController = {
   createPurchase,
   getPurchasesBySupplier,
@@ -1099,6 +1324,7 @@ const purchaseController = {
   editPurchase,
   deletePurchase,
   getLastTransactionByProduct,
+  completePurchase,
 };
 
 export default purchaseController;

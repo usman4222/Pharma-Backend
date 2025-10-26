@@ -1165,83 +1165,185 @@ const getBookerSales = async (req, res) => {
 };
 
 // ✅ Add Recovery Controller
+// export const addRecover = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const { orderId } = req.params;
+//     const { recovery_amount, recovery_date, recovered_by } = req.body; // ✅ include recovered_by
+
+//     if (!recovery_amount || recovery_amount <= 0) {
+//       return sendError(res, "Recovery amount must be greater than zero", 400);
+//     }
+
+//     if (!recovered_by) {
+//       return sendError(res, "Recovered by user ID is required", 400);
+//     }
+
+//     // 🔹 Find the order
+//     const order = await Order.findById(orderId).session(session);
+//     if (!order) {
+//       await session.abortTransaction();
+//       return sendError(res, "Order not found", 404);
+//     }
+
+//     if (order.due_amount < recovery_amount) {
+//       await session.abortTransaction();
+//       return sendError(
+//         res,
+//         "Recovery amount cannot be greater than due amount",
+//         400
+//       );
+//     }
+
+//     // 🔹 Find supplier
+//     const supplier = await Supplier.findById(order.supplier_id).session(
+//       session
+//     );
+//     if (!supplier) {
+//       await session.abortTransaction();
+//       return sendError(res, "Supplier not found", 404);
+//     }
+
+//     // 🔹 Update Order's due_amount and recovered fields
+//     order.due_amount = Number((order.due_amount - recovery_amount).toFixed(2));
+//     order.recovered_amount += recovery_amount;
+//     order.recovered_date = recovery_date || new Date();
+//     order.recovered_by = recovered_by; // ✅ store the user ID who recovered
+
+//     if (order.due_amount <= 0) {
+//       order.due_amount = 0;
+//       order.status = "recovered";
+//     }
+
+//     await order.save({ session });
+
+//     // 🔹 Update Supplier's debit (pay)
+//     supplier.pay = (supplier.pay || 0) - recovery_amount;
+//     if (supplier.pay < 0) supplier.pay = 0; // safety check
+//     await supplier.save({ session });
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return successResponse(res, "Recovery added successfully", {
+//       sale: order,
+//       supplier,
+//       recovery: {
+//         recovery_amount,
+//         recovery_date: recovery_date || new Date(),
+//         recovered_by, // ✅ return user ID in response
+//       },
+//     });
+//   } catch (error) {
+//     await session.abortTransaction();
+//     session.endSession();
+//     return sendError(res, "Failed to add recovery", error);
+//   }
+// };
+
+// ✅ Bulk Recovery Controller — allocate 1 total amount across multiple invoices
 export const addRecover = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
-
   try {
-    const { orderId } = req.params;
-    const { recovery_amount, recovery_date, recovered_by } = req.body; // ✅ include recovered_by
+    const { orderIds = [], total_recovery_amount, recovery_date, recovered_by } = req.body;
+     console.log("req.body:", req.body); 
 
-    if (!recovery_amount || recovery_amount <= 0) {
-      return sendError(res, "Recovery amount must be greater than zero", 400);
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      return sendError(res, "At least one order ID is required", 400);
     }
-
+    if (!total_recovery_amount || total_recovery_amount <= 0) {
+      return sendError(res, "Total recovery amount must be greater than zero", 400);
+    }
     if (!recovered_by) {
       return sendError(res, "Recovered by user ID is required", 400);
     }
 
-    // 🔹 Find the order
-    const order = await Order.findById(orderId).session(session);
-    if (!order) {
+    // 🔹 Fetch all orders
+    const orders = await Order.find({ _id: { $in: orderIds } }).session(session);
+    if (orders.length === 0) {
       await session.abortTransaction();
-      return sendError(res, "Order not found", 404);
+      return sendError(res, "No matching orders found", 404);
     }
 
-    if (order.due_amount < recovery_amount) {
+    // 🔹 Ensure all orders belong to the same supplier (optional business rule)
+    const supplierId = orders[0].supplier_id.toString();
+    const allSameSupplier = orders.every(o => o.supplier_id.toString() === supplierId);
+    if (!allSameSupplier) {
       await session.abortTransaction();
-      return sendError(
-        res,
-        "Recovery amount cannot be greater than due amount",
-        400
-      );
+      return sendError(res, "All selected invoices must belong to the same supplier", 400);
     }
 
-    // 🔹 Find supplier
-    const supplier = await Supplier.findById(order.supplier_id).session(
-      session
-    );
+    const supplier = await Supplier.findById(supplierId).session(session);
     if (!supplier) {
       await session.abortTransaction();
       return sendError(res, "Supplier not found", 404);
     }
 
-    // 🔹 Update Order's due_amount and recovered fields
-    order.due_amount = Number((order.due_amount - recovery_amount).toFixed(2));
-    order.recovered_amount += recovery_amount;
-    order.recovered_date = recovery_date || new Date();
-    order.recovered_by = recovered_by; // ✅ store the user ID who recovered
-
-    if (order.due_amount <= 0) {
-      order.due_amount = 0;
-      order.status = "recovered";
+    // 🔹 Compute total due across these invoices
+    const totalDue = orders.reduce((acc, ord) => acc + (ord.due_amount || 0), 0);
+    if (total_recovery_amount > totalDue) {
+      await session.abortTransaction();
+      return sendError(res, "Recovery exceeds total due for selected invoices", 400);
     }
 
-    await order.save({ session });
+    // 🔹 Distribute the recovery across invoices in order sequence (FIFO by created date)
+    const sortedOrders = orders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    let remaining = total_recovery_amount;
+    const recoveries = [];
 
-    // 🔹 Update Supplier's debit (pay)
-    supplier.pay = (supplier.pay || 0) - recovery_amount;
-    if (supplier.pay < 0) supplier.pay = 0; // safety check
+    for (const order of sortedOrders) {
+      if (remaining <= 0) break;
+
+      const payment = Math.min(order.due_amount, remaining);
+
+      order.due_amount = Number((order.due_amount - payment).toFixed(2));
+      order.recovered_amount = (order.recovered_amount || 0) + payment;
+      order.recovered_date = recovery_date || new Date();
+      order.recovered_by = recovered_by;
+      if (order.due_amount <= 0) {
+        order.status = "recovered";
+        order.due_amount = 0;
+      }
+      await order.save({ session });
+
+      recoveries.push({
+        order_id: order._id,
+        recovery_amount: payment,
+        recovered_by,
+        recovery_date: recovery_date || new Date(),
+      });
+
+      remaining -= payment;
+    }
+
+    // 🔹 Adjust supplier payable balance
+    supplier.pay = (supplier.pay || 0) - total_recovery_amount;
+    if (supplier.pay < 0) supplier.pay = 0;
     await supplier.save({ session });
+
+    // 🔹 Optionally log entries in a Recovery collection
+    // await Recovery.insertMany(recoveries, { session });
 
     await session.commitTransaction();
     session.endSession();
 
-    return successResponse(res, "Recovery added successfully", {
-      sale: order,
+    return successResponse(res, "Bulk recovery applied successfully", {
       supplier,
-      recovery: {
-        recovery_amount,
-        recovery_date: recovery_date || new Date(),
-        recovered_by, // ✅ return user ID in response
-      },
+      totalRecovered: total_recovery_amount,
+      remainingUnallocated: remaining,
+      recoveries,
     });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    return sendError(res, "Failed to add recovery", error);
+    console.error("Bulk Recovery Error:", error);
+    return sendError(res, error.message || "Bulk recovery failed");
   }
 };
+
 
 // Get all sales with pagination (only with valid booker_id)
 const getAllBookersSales = async (req, res) => {
