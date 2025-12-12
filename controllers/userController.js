@@ -116,11 +116,15 @@ export const getAllActiveUsers = async (req, res) => {
         totalCredit: 0,
       };
 
+      const netBalance = ledger.totalCredit - ledger.totalDebit;
+      const balanceType = netBalance >= 0 ? "CR" : "DB";
+
       return {
         ...user.toObject(),
         totalDebit: ledger.totalDebit,
         totalCredit: ledger.totalCredit,
-        netBalance: ledger.totalCredit - ledger.totalDebit,
+        netBalance: Math.abs(netBalance),
+        balanceType,
       };
     });
 
@@ -132,6 +136,7 @@ export const getAllActiveUsers = async (req, res) => {
     return sendError(res, "Failed to fetch users", error.message || error);
   }
 };
+
 
 
 
