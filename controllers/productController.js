@@ -673,62 +673,160 @@ export const getProductTransactions = async (req, res) => {
       return sendError(res, "Product not found", 404);
     }
 
-    // 🔹 Get all sale orders for this product
-    const saleItems = await OrderItem.find({ product_id })
-      .populate({
-        path: "order_id",
-        match: { type: "sale" },
-        select: "invoice_number supplier_id total paid_amount due_amount net_value note due_date status",
-        populate: { path: "supplier_id", select: "name" },
-      })
-      .lean();
+    // 🔹 Fetch ALL transactions using aggregation for better performance
+    const allTransactions = await OrderItem.aggregate([
+      { $match: { product_id: new mongoose.Types.ObjectId(product_id) } },
 
-    const saleOrders = saleItems
-      .filter(item => item.order_id !== null)
-      .map(item => ({
-        order_id: item.order_id._id,
-        invoice_number: item.order_id.invoice_number,
-        supplier: item.order_id.supplier_id?.name || null,
-        units: item.units,
-        unit_price: item.unit_price,
-        total: item.total,
-        batch: item.batch,
-        expiry: item.expiry,
-        status: item.order_id.status,
-        type: "sale",
-        date: item.order_id.createdAt,
-      }));
+      // Lookup Order details
+      {
+        $lookup: {
+          from: "orders",
+          localField: "order_id",
+          foreignField: "_id",
+          as: "order"
+        }
+      },
+      { $unwind: "$order" },
 
-    // 🔹 Get all purchase orders for this product
-    const purchaseItems = await OrderItem.find({ product_id })
-      .populate({
-        path: "order_id",
-        match: { type: "purchase" },
-        select: "invoice_number supplier_id total paid_amount due_amount net_value note due_date status",
-        populate: { path: "supplier_id", select: "name" },
-      })
-      .lean();
+      // Filter relevant order types
+      {
+        $match: {
+          "order.type": {
+            $in: ["purchase", "sale", "purchase_return", "sale_return"]
+          }
+        }
+      },
 
-    const purchaseOrders = purchaseItems
-      .filter(item => item.order_id !== null)
-      .map(item => ({
-        order_id: item.order_id._id,
-        invoice_number: item.order_id.invoice_number,
-        supplier: item.order_id.supplier_id?.name || null,
-        units: item.units,
-        unit_price: item.unit_price,
-        total: item.total,
-        batch: item.batch,
-        expiry: item.expiry,
-        status: item.order_id.status,
-        type: "purchase",
-        date: item.order_id.createdAt,
-      }));
+      // Lookup Supplier/Customer
+      {
+        $lookup: {
+          from: "suppliers",
+          localField: "order.supplier_id",
+          foreignField: "_id",
+          as: "party"
+        }
+      },
+      { $unwind: { path: "$party", preserveNullAndEmptyArrays: true } },
+
+      // Project fields
+      {
+        $project: {
+          order_id: "$order._id",
+          invoice_number: "$order.invoice_number",
+          purchase_number: "$order.purchase_number",
+          party_name: "$party.company_name",
+          units: 1,
+          unit_price: 1,
+          discount: 1,
+          profit: 1,
+          total: 1,
+          batch: 1,
+          expiry: 1,
+          status: "$order.status",
+          type: "$order.type",
+          date: "$order.createdAt",
+          paid_amount: "$order.paid_amount",
+          due_amount: "$order.due_amount",
+          net_value: "$order.net_value",
+          note: "$order.note",
+          due_date: "$order.due_date",
+          item_created_at: "$createdAt"
+        }
+      },
+
+      // Sort by date (oldest first for running balance calculation)
+      { $sort: { date: 1, item_created_at: 1 } }
+    ]);
+
+    // 🔹 Calculate running balance (stock ledger)
+    let runningBalance = 0;
+    const transactionsWithBalance = allTransactions.map((transaction, index) => {
+      let stockIn = 0;
+      let stockOut = 0;
+
+      // Determine IN/OUT based on transaction type
+      switch (transaction.type) {
+        case "purchase":
+          stockIn = transaction.units;
+          runningBalance += transaction.units;
+          break;
+        case "sale":
+          stockOut = transaction.units;
+          runningBalance -= transaction.units;
+          break;
+        case "purchase_return":
+          // Return to supplier = stock goes out
+          stockOut = transaction.units;
+          runningBalance -= transaction.units;
+          break;
+        case "sale_return":
+          // Return from customer = stock comes in
+          stockIn = transaction.units;
+          runningBalance += transaction.units;
+          break;
+      }
+
+      return {
+        transaction_no: index + 1,
+        date: transaction.date,
+        type: transaction.type,
+        invoice_number: transaction.invoice_number || transaction.purchase_number || "N/A",
+        party_name: transaction.party_name || "N/A",
+        batch: transaction.batch,
+        expiry: transaction.expiry,
+        stock_in: stockIn,
+        stock_out: stockOut,
+        unit_price: transaction.unit_price,
+        discount: transaction.discount || 0,
+        total_value: transaction.total,
+        running_balance: runningBalance,
+        status: transaction.status,
+        profit: transaction.profit || 0,
+        paid_amount: transaction.paid_amount,
+        due_amount: transaction.due_amount,
+        note: transaction.note || "",
+        order_id: transaction.order_id
+      };
+    });
+
+    // 🔹 Calculate summary statistics
+    const summary = {
+      total_transactions: allTransactions.length,
+      total_stock_in: transactionsWithBalance.reduce((sum, t) => sum + t.stock_in, 0),
+      total_stock_out: transactionsWithBalance.reduce((sum, t) => sum + t.stock_out, 0),
+      current_balance: runningBalance,
+      total_purchase_value: transactionsWithBalance
+        .filter(t => t.type === "purchase")
+        .reduce((sum, t) => sum + t.total_value, 0),
+      total_sale_value: transactionsWithBalance
+        .filter(t => t.type === "sale")
+        .reduce((sum, t) => sum + t.total_value, 0),
+      total_profit: transactionsWithBalance.reduce((sum, t) => sum + t.profit, 0),
+      purchases_count: transactionsWithBalance.filter(t => t.type === "purchase").length,
+      sales_count: transactionsWithBalance.filter(t => t.type === "sale").length,
+      returns_count: transactionsWithBalance.filter(t =>
+        t.type === "purchase_return" || t.type === "sale_return"
+      ).length
+    };
+
+    // 🔹 Group transactions by type for quick reference
+    const groupedByType = {
+      purchases: transactionsWithBalance.filter(t => t.type === "purchase"),
+      sales: transactionsWithBalance.filter(t => t.type === "sale"),
+      purchase_returns: transactionsWithBalance.filter(t => t.type === "purchase_return"),
+      sale_returns: transactionsWithBalance.filter(t => t.type === "sale_return")
+    };
 
     return successResponse(res, "Product transactions fetched successfully", {
-      product: { _id: product._id, name: product.name },
-      sales: saleOrders,
-      purchases: purchaseOrders,
+      product: {
+        _id: product._id,
+        name: product.name,
+        retail_price: product.retail_price,
+        item_code: product.item_code
+      },
+      ledger: transactionsWithBalance, // All transactions with running balance
+      summary,
+      grouped_transactions: groupedByType
     });
   } catch (error) {
     console.error("Get Product Transactions Error:", error);

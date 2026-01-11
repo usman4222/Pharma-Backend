@@ -7,7 +7,7 @@ const router = express.Router();
 router.post("/", purchaseController.createPurchase);
 
 // 📥 Complete a skipped purchase (status -> completed)
-router.patch("/:orderId/complete", purchaseController.completePurchase); 
+router.patch("/:orderId/complete", purchaseController.completePurchase);
 
 // 📥 Return purchase by invoice
 router.post("/return", purchaseController.returnPurchaseByInvoice);
@@ -16,9 +16,9 @@ router.post("/return", purchaseController.returnPurchaseByInvoice);
 router.get("/supplier/:supplierId", purchaseController.getPurchasesBySupplier);
 
 // 📤 Get all purchases
-router.get("/", purchaseController.getAllPurchases); 
+router.get("/", purchaseController.getAllPurchases);
 
-router.get("/transactions/last", purchaseController.getLastTransactionByProduct);
+router.get("/transactions/last", purchaseController.getLastTransactionPurchaseByProduct);
 
 // 📤 Get purchase for return (by invoice_number or supplier_id)
 router.get("/return/search", purchaseController.getPurchaseForReturn);

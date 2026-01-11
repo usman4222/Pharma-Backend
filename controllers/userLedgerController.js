@@ -42,27 +42,51 @@ const getUserLedgers = async (req, res) => {
       return sendError(res, "User not found", 404);
     }
 
-    // Get all ledger entries for the user
-    const ledgers = await UserLedger.find({ user_id: id }).sort({ date: -1 });
+    // Get all ledger entries for the user sorted by date (oldest first for running balance)
+    const ledgers = await UserLedger.find({ user_id: id }).sort({ date: 1, createdAt: 1 });
+
+    // Calculate running balance for each entry
+    let runningBalance = 0;
+    const ledgersWithBalance = ledgers.map((entry, index) => {
+      // Credit increases balance, Debit decreases balance
+      runningBalance = runningBalance + entry.credit - entry.debit;
+
+      return {
+        ...entry.toObject(),
+        transaction_no: index + 1,
+        running_balance: runningBalance,
+        balance_type: runningBalance >= 0 ? "CR" : "DB",
+        balance_amount: Math.abs(runningBalance),
+        balance_display: `${Math.abs(runningBalance)} ${runningBalance >= 0 ? "CR" : "DB"}`
+      };
+    });
+
+    // Reverse to show newest first (as original)
+    ledgersWithBalance.reverse();
 
     // Calculate totals
     let totalCredit = 0;
     let totalDebit = 0;
+    let totalIncentive = 0;
 
     ledgers.forEach(entry => {
       totalCredit += entry.credit;
       totalDebit += entry.debit;
+      totalIncentive += entry.incentive_amount || 0;
     });
 
     const balance = totalCredit - totalDebit;
     const balanceDisplay = `${Math.abs(balance)} ${balance >= 0 ? "CR" : "DB"}`;
 
     return successResponse(res, "User ledgers retrieved successfully", {
-      ledgers,
+      ledgers: ledgersWithBalance,
       summary: {
         totalCredit,
         totalDebit,
-        currentBalance: balanceDisplay
+        totalIncentive,
+        currentBalance: balanceDisplay,
+        finalBalance: balance,
+        balanceType: balance >= 0 ? "CR" : "DB"
       }
     });
   } catch (error) {

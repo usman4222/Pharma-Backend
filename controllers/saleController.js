@@ -654,9 +654,9 @@ const getProductSales = async (req, res) => {
       stockData.length > 0
         ? stockData[0]
         : {
-            totalStock: 0,
-            productIn: 0,
-          };
+          totalStock: 0,
+          productIn: 0,
+        };
 
     return successResponse(res, "Product sales fetched successfully", {
       sales: orderItems,
@@ -977,10 +977,9 @@ export const getAllSaleReturns = async (req, res) => {
   }
 };
 
-export const getLastTransactionByProduct = async (req, res) => {
+export const getLastSaleTransactionByProduct = async (req, res) => {
   try {
-    console.log("called");
-    const { productId } = req.query;
+    const { productId, supplierId, batch } = req.query;
 
     // Validate input
     if (!productId) {
@@ -990,13 +989,19 @@ export const getLastTransactionByProduct = async (req, res) => {
       });
     }
 
-    // Match only the product
+    // Match the product and optionally the batch
     const itemMatch = {
       product_id: new mongoose.Types.ObjectId(productId),
     };
+    if (batch) {
+      itemMatch.batch = batch;
+    }
 
-    // Match only SALE orders
+    // Match only SALE orders and optionally the supplier (customer)
     const orderMatch = { type: "sale" };
+    if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
+      orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
+    }
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
@@ -1031,14 +1036,14 @@ export const getLastTransactionByProduct = async (req, res) => {
         },
       },
       { $unwind: "$order" },
-      { $sort: { createdAt: -1 } },
+      { $sort: { "order.createdAt": -1 } },
       { $limit: 1 },
     ]);
 
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
-        message: "No previous SALE transaction found for this product",
+        message: "No previous SALE transaction found matching these criteria",
       });
     }
 
@@ -1065,13 +1070,13 @@ export const getLastTransactionByProduct = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Last purchase transaction fetched successfully",
+      message: "Last sale transaction fetched successfully",
       data,
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch last purchase transaction",
+      message: "Failed to fetch last sale transaction",
       error: error.message,
     });
   }
@@ -1249,7 +1254,7 @@ export const addRecover = async (req, res) => {
   session.startTransaction();
   try {
     const { orderIds = [], total_recovery_amount, recovery_date, recovered_by } = req.body;
-     console.log("req.body:", req.body); 
+    console.log("req.body:", req.body);
 
     if (!Array.isArray(orderIds) || orderIds.length === 0) {
       return sendError(res, "At least one order ID is required", 400);
@@ -1457,6 +1462,7 @@ const deleteSale = async (req, res) => {
   }
 };
 
+
 // Export all like you mentioned
 const saleController = {
   createSale,
@@ -1471,7 +1477,7 @@ const saleController = {
   getBookerSales,
   getAllBookersSales,
   deleteSale,
-  getLastTransactionByProduct,
+  getLastSaleTransactionByProduct,
 };
 
 export default saleController;

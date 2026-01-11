@@ -54,7 +54,6 @@ const createPurchase = async (req, res) => {
     // ✅ Required field validation only for completed orders
     if (status === "completed") {
       const requiredFields = {
-        invoice_number,
         supplier_id,
         subtotal,
         total,
@@ -157,26 +156,62 @@ const createPurchase = async (req, res) => {
 
       const expiryValue = item.expiry || null;
 
-      batchUpdates.push({
-        updateOne: {
-          filter: { product_id: item.product_id, batch_number: item.batch },
-          update: {
-            $setOnInsert: {
-              product_id: item.product_id,
-              batch_number: item.batch,
-              purchase_price: item.unit_price,
-              expiry_date: expiryValue,
+      // 🔹 Check if this specific batch already exists to merge discounts/costs
+      const existingBatch = await Batch.findOne({
+        product_id: item.product_id,
+        batch_number: item.batch,
+      }).session(session);
+
+      if (existingBatch) {
+        // 🔹 Same Batch: Calculate weighted average
+        const oldStock = existingBatch.stock || 0;
+        const newStock = item.units || 0;
+        const totalStock = oldStock + newStock;
+
+        const oldDiscountTotal = (existingBatch.discount_per_unit || 0) * oldStock;
+        const newDiscountTotal = item.discount || 0;
+        const mergedDiscountPerUnit = totalStock > 0 ? (oldDiscountTotal + newDiscountTotal) / totalStock : 0;
+
+        const oldCostTotal = (existingBatch.unit_cost || 0) * oldStock;
+        const newCostTotal = item.total || 0;
+        const mergedUnitCost = totalStock > 0 ? (oldCostTotal + newCostTotal) / totalStock : 0;
+
+        batchUpdates.push({
+          updateOne: {
+            filter: { product_id: item.product_id, batch_number: item.batch },
+            update: {
+              $set: {
+                unit_cost: mergedUnitCost,
+                discount_per_unit: mergedDiscountPerUnit,
+                expiry_date: expiryValue || existingBatch.expiry_date,
+              },
+              $inc: { stock: item.units },
             },
-            $set: {
-              unit_cost: item.total / item.units,
-              discount_per_unit:
-                item.units > 0 ? (item.discount || 0) / item.units : 0,
-            },
-            $inc: { stock: item.units },
           },
-          upsert: true,
-        },
-      });
+        });
+      } else {
+        // 🔹 New Batch: Don't link with other batches, just insert fresh
+        batchUpdates.push({
+          updateOne: {
+            filter: { product_id: item.product_id, batch_number: item.batch },
+            update: {
+              $setOnInsert: {
+                product_id: item.product_id,
+                batch_number: item.batch,
+                purchase_price: item.unit_price,
+                expiry_date: expiryValue,
+              },
+              $set: {
+                unit_cost: item.units > 0 ? item.total / item.units : 0,
+                discount_per_unit:
+                  item.units > 0 ? (item.discount || 0) / item.units : 0,
+              },
+              $inc: { stock: item.units },
+            },
+            upsert: true,
+          },
+        });
+      }
     }
 
     if (batchUpdates.length) {
@@ -413,9 +448,9 @@ const getProductPurchases = async (req, res) => {
       stockData.length > 0
         ? stockData[0]
         : {
-            totalStock: 0,
-            productIn: 0,
-          };
+          totalStock: 0,
+          productIn: 0,
+        };
 
     return successResponse(res, "Product purchases fetched successfully", {
       purchases: orderItems,
@@ -736,9 +771,9 @@ const getAllPurchaseReturns = async (req, res) => {
   }
 };
 
-export const getLastTransactionByProduct = async (req, res) => {
+export const getLastTransactionPurchaseByProduct = async (req, res) => {
   try {
-    const { productId } = req.query;
+    const { productId, supplierId, batch } = req.query;
 
     // Validate input
     if (!productId) {
@@ -748,13 +783,21 @@ export const getLastTransactionByProduct = async (req, res) => {
       });
     }
 
-    // Match only the product
+    // Match conditions
     const itemMatch = {
       product_id: new mongoose.Types.ObjectId(productId),
     };
 
-    // Match only SALE orders
-    const orderMatch = { type: "sale" };
+    // If batch is provided, filter by it
+    if (batch) {
+      itemMatch.batch = batch;
+    }
+
+    // Order match conditions
+    const orderMatch = { type: "purchase" };
+    if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
+      orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
+    }
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
@@ -789,7 +832,7 @@ export const getLastTransactionByProduct = async (req, res) => {
         },
       },
       { $unwind: "$order" },
-      { $sort: { createdAt: -1 } },
+      { $sort: { "order.createdAt": -1 } },
       { $limit: 1 },
     ]);
 
@@ -1010,26 +1053,62 @@ const editPurchase = async (req, res) => {
 
         newItems.push(newItem[0]);
 
-        batchUpdates.push({
-          updateOne: {
-            filter: { product_id: item.product_id, batch_number: item.batch },
-            update: {
-              $setOnInsert: {
-                product_id: item.product_id,
-                batch_number: item.batch,
-                purchase_price: item.unit_price,
-                expiry_date: item.expiry,
+        // 🔹 Check if same batch already exists to merge discounts/costs
+        const existingBatch = await Batch.findOne({
+          product_id: item.product_id,
+          batch_number: item.batch,
+        }).session(session);
+
+        if (existingBatch) {
+          // 🔹 Same Batch: Calculate weighted average for merge
+          const oldStock = existingBatch.stock || 0;
+          const newStock = item.units || 0;
+          const totalStock = oldStock + newStock;
+
+          const oldDiscountTotal = (existingBatch.discount_per_unit || 0) * oldStock;
+          const newDiscountTotal = item.discount || 0;
+          const mergedDiscountPerUnit = totalStock > 0 ? (oldDiscountTotal + newDiscountTotal) / totalStock : 0;
+
+          const oldCostTotal = (existingBatch.unit_cost || 0) * oldStock;
+          const newCostTotal = item.total || 0;
+          const mergedUnitCost = totalStock > 0 ? (oldCostTotal + newCostTotal) / totalStock : 0;
+
+          batchUpdates.push({
+            updateOne: {
+              filter: { product_id: item.product_id, batch_number: item.batch },
+              update: {
+                $set: {
+                  unit_cost: mergedUnitCost,
+                  discount_per_unit: mergedDiscountPerUnit,
+                  expiry_date: item.expiry || existingBatch.expiry_date,
+                },
+                $inc: { stock: item.units },
               },
-              $set: {
-                unit_cost: item.units > 0 ? item.total / item.units : 0,
-                discount_per_unit:
-                  item.units > 0 ? (item.discount || 0) / item.units : 0,
-              },
-              $inc: { stock: item.units },
             },
-            upsert: true,
-          },
-        });
+          });
+        } else {
+          // 🔹 New Batch: Fresh insert
+          batchUpdates.push({
+            updateOne: {
+              filter: { product_id: item.product_id, batch_number: item.batch },
+              update: {
+                $setOnInsert: {
+                  product_id: item.product_id,
+                  batch_number: item.batch,
+                  purchase_price: item.unit_price,
+                  expiry_date: item.expiry,
+                },
+                $set: {
+                  unit_cost: item.units > 0 ? item.total / item.units : 0,
+                  discount_per_unit:
+                    item.units > 0 ? (item.discount || 0) / item.units : 0,
+                },
+                $inc: { stock: item.units },
+              },
+              upsert: true,
+            },
+          });
+        }
       }
 
       if (batchUpdates.length > 0) {
@@ -1127,99 +1206,292 @@ const deletePurchase = async (req, res) => {
 };
 
 // PATCH /purchases/:orderId/complete
+// export const completePurchase = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+
+//   try {
+//     const {
+//       invoice_number,
+//       subtotal,
+//       total,
+//       paid_amount,
+//       due_amount,
+//       net_value,
+//       due_date,
+//       note,
+//       items = [],
+//     } = req.body;
+
+//     // 1) Load order (must exist, must be type=purchase, status=skipped)
+//     const order = await Order.findById(req.params.orderId).session(session);
+//     if (!order) {
+//       await session.abortTransaction();
+//       return sendError(res, "Order not found", 404);
+//     }
+//     if (order.type !== "purchase") {
+//       await session.abortTransaction();
+//       return sendError(res, "Invalid order type", 400);
+//     }
+//     if (order.status !== "skipped") {
+//       await session.abortTransaction();
+//       return sendError(res, "Only skipped orders can be completed", 400);
+//     }
+
+//     // 2) Supplier must exist
+//     const supplierDoc = await SupplierModel.findById(order.supplier_id).session(
+//       session
+//     );
+//     if (!supplierDoc) {
+//       await session.abortTransaction();
+//       return sendError(res, "Supplier not found", 404);
+//     }
+
+//     // 3) Validate required fields
+//     const requiredFields = {
+//       invoice_number: invoice_number ?? order.invoice_number,
+//       supplier_id: order.supplier_id,
+//       subtotal: subtotal ?? order.subtotal,
+//       total: total ?? order.total,
+//       paid_amount: paid_amount ?? order.paid_amount,
+//       net_value: net_value ?? order.net_value,
+//     };
+//     const missing = Object.entries(requiredFields)
+//       .filter(
+//         ([_, v]) =>
+//           v === undefined ||
+//           v === null ||
+//           v === "" ||
+//           (Array.isArray(v) && v.length === 0)
+//       )
+//       .map(([k]) => k);
+//     if (missing.length) {
+//       await session.abortTransaction();
+//       return sendError(
+//         res,
+//         `Missing required fields: ${missing.join(", ")}`,
+//         400
+//       );
+//     }
+
+//     // 4) Persist "completed" fields onto order and flip status
+//     order.invoice_number = invoice_number ?? order.invoice_number;
+//     order.subtotal = subtotal ?? order.subtotal;
+//     order.total = total ?? order.total;
+//     order.paid_amount = paid_amount ?? order.paid_amount;
+//     order.due_amount = due_amount ?? order.due_amount;
+//     order.net_value = net_value ?? order.net_value;
+//     order.note = note ?? order.note;
+//     order.due_date = due_date ?? order.due_date;
+//     order.status = "completed";
+//     await order.save({ session });
+
+//     // 5) Supplier balances
+//     const updatedPay = supplierDoc.pay || 0;
+//     const completedTotal = order.total;
+//     const completedPaid = order.paid_amount || 0;
+//     const updatedReceive =
+//       (supplierDoc.receive || 0) + (completedTotal - completedPaid);
+//     await SupplierModel.findByIdAndUpdate(
+//       order.supplier_id,
+//       { pay: updatedPay, receive: updatedReceive },
+//       { session }
+//     );
+
+//     // 6) Upsert order items + batch stock updates
+//     const orderItems = [];
+//     const batchUpdates = [];
+
+//     for (const item of items) {
+//       const product = await Product.findById(item.product_id).session(session);
+//       if (!product) {
+//         await session.abortTransaction();
+//         return sendError(res, `Product not found: ${item.product_id}`, 404);
+//       }
+
+//       const expiryValue = item.expiry || null;
+
+//       // Try to find existing item (from draft)
+//       let orderItem = await OrderItem.findOne({
+//         order_id: order._id,
+//         product_id: item.product_id,
+//         batch: item.batch,
+//       }).session(session);
+
+//       if (orderItem) {
+//         // Update existing item
+//         orderItem.units = item.units;
+//         orderItem.unit_price = item.unit_price;
+//         orderItem.discount = item.discount || 0;
+//         orderItem.total = item.total;
+//         orderItem.expiry = expiryValue;
+//         await orderItem.save({ session });
+//       } else {
+//         // Insert new item
+//         [orderItem] = await OrderItem.create(
+//           [
+//             {
+//               order_id: order._id,
+//               product_id: item.product_id,
+//               batch: item.batch,
+//               expiry: expiryValue,
+//               units: item.units,
+//               unit_price: item.unit_price,
+//               discount: item.discount || 0,
+//               total: item.total,
+//             },
+//           ],
+//           { session }
+//         );
+//       }
+
+//       orderItems.push(orderItem);
+
+//       // Batch stock updates
+//       batchUpdates.push({
+//         updateOne: {
+//           filter: { product_id: item.product_id, batch_number: item.batch },
+//           update: {
+//             $setOnInsert: {
+//               product_id: item.product_id,
+//               batch_number: item.batch,
+//               purchase_price: item.unit_price,
+//               expiry_date: expiryValue,
+//             },
+//             $set: {
+//               unit_cost: item.units > 0 ? item.total / item.units : 0,
+//               discount_per_unit:
+//                 item.units > 0 ? (item.discount || 0) / item.units : 0,
+//             },
+//             $inc: { stock: item.units },
+//           },
+//           upsert: true,
+//         },
+//       });
+//     }
+
+//     if (batchUpdates.length) {
+//       await Batch.bulkWrite(batchUpdates, { session });
+//     }
+
+//     await session.commitTransaction();
+
+//     return successResponse(
+//       res,
+//       "Purchase order completed successfully",
+//       { order, items: orderItems },
+//       200
+//     );
+//   } catch (err) {
+//     await session.abortTransaction();
+//     console.error("Complete purchase error:", err);
+//     return sendError(res, err.message || "Something went wrong");
+//   } finally {
+//     session.endSession();
+//   }
+// };
+// PATCH /purchase/:orderId/complete
 export const completePurchase = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const {
-      invoice_number,
-      subtotal,
-      total,
-      paid_amount,
-      due_amount,
-      net_value,
-      due_date,
-      note,
-      items = [],
-    } = req.body;
-
-    // 1) Load order (must exist, must be type=purchase, status=skipped)
-    const order = await Order.findById(req.params.orderId).session(session);
-    if (!order) {
+    const purchase = await Order.findById(req.params.orderId).session(session);
+    if (!purchase) {
       await session.abortTransaction();
-      return sendError(res, "Order not found", 404);
-    }
-    if (order.type !== "purchase") {
-      await session.abortTransaction();
-      return sendError(res, "Invalid order type", 400);
-    }
-    if (order.status !== "skipped") {
-      await session.abortTransaction();
-      return sendError(res, "Only skipped orders can be completed", 400);
+      return sendError(res, "Purchase not found", 404);
     }
 
-    // 2) Supplier must exist
-    const supplierDoc = await SupplierModel.findById(order.supplier_id).session(
-      session
-    );
+    // 🚫 Already completed
+    if (purchase.status === "completed") {
+      await session.commitTransaction();
+      return res.json({ success: true, purchase });
+    }
+
+    /* =====================================================
+       1️⃣ Update allowed fields ONLY
+       ===================================================== */
+    const allowedFields = [
+      "subtotal",
+      "total",
+      "paid_amount",
+      "due_amount",
+      "net_value",
+      "note",
+      "due_date",
+    ];
+
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        purchase[field] = req.body[field];
+      }
+    });
+
+    /* =====================================================
+   2️⃣ Generate next invoice number (CORRECT LOGIC)
+   ===================================================== */
+
+    // Get ALL completed invoices
+    const completedInvoices = await Order.find({
+      status: "completed",
+      invoice_number: { $regex: /^PUR-\d+$/ },
+    })
+      .select("invoice_number")
+      .session(session);
+
+    let maxInvoice = 0;
+
+    for (const doc of completedInvoices) {
+      const num = parseInt(doc.invoice_number.replace("PUR-", ""), 10);
+      if (!isNaN(num) && num > maxInvoice) {
+        maxInvoice = num;
+      }
+    }
+
+    // If last invoice was PUR-10 → next is 11
+    const nextNumber = maxInvoice + 1;
+
+    // Safety check
+    if (!nextNumber || nextNumber <= 0) {
+      await session.abortTransaction();
+      return sendError(
+        res,
+        "Invoice number could not be generated safely",
+        400
+      );
+    }
+
+    purchase.invoice_number = `PUR-${nextNumber}`;
+    purchase.status = "completed";
+
+    /* =====================================================
+       3️⃣ Supplier validation & balance update
+       ===================================================== */
+    const supplierDoc = await SupplierModel.findById(
+      purchase.supplier_id
+    ).session(session);
+
     if (!supplierDoc) {
       await session.abortTransaction();
       return sendError(res, "Supplier not found", 404);
     }
 
-    // 3) Validate required fields
-    const requiredFields = {
-      invoice_number: invoice_number ?? order.invoice_number,
-      supplier_id: order.supplier_id,
-      subtotal: subtotal ?? order.subtotal,
-      total: total ?? order.total,
-      paid_amount: paid_amount ?? order.paid_amount,
-      net_value: net_value ?? order.net_value,
-    };
-    const missing = Object.entries(requiredFields)
-      .filter(
-        ([_, v]) =>
-          v === undefined ||
-          v === null ||
-          v === "" ||
-          (Array.isArray(v) && v.length === 0)
-      )
-      .map(([k]) => k);
-    if (missing.length) {
-      await session.abortTransaction();
-      return sendError(
-        res,
-        `Missing required fields: ${missing.join(", ")}`,
-        400
-      );
-    }
+    const completedTotal = purchase.total || 0;
+    const completedPaid = purchase.paid_amount || 0;
 
-    // 4) Persist "completed" fields onto order and flip status
-    order.invoice_number = invoice_number ?? order.invoice_number;
-    order.subtotal = subtotal ?? order.subtotal;
-    order.total = total ?? order.total;
-    order.paid_amount = paid_amount ?? order.paid_amount;
-    order.due_amount = due_amount ?? order.due_amount;
-    order.net_value = net_value ?? order.net_value;
-    order.note = note ?? order.note;
-    order.due_date = due_date ?? order.due_date;
-    order.status = "completed";
-    await order.save({ session });
-
-    // 5) Supplier balances
-    const updatedPay = supplierDoc.pay || 0;
-    const completedTotal = order.total;
-    const completedPaid = order.paid_amount || 0;
-    const updatedReceive =
-      (supplierDoc.receive || 0) + (completedTotal - completedPaid);
     await SupplierModel.findByIdAndUpdate(
-      order.supplier_id,
-      { pay: updatedPay, receive: updatedReceive },
+      purchase.supplier_id,
+      {
+        pay: supplierDoc.pay || 0,
+        receive: (supplierDoc.receive || 0) + (completedTotal - completedPaid),
+      },
       { session }
     );
 
-    // 6) Upsert order items + batch stock updates
+    /* =====================================================
+       4️⃣ Items & batch stock updates
+       ===================================================== */
+    const { items = [] } = req.body;
     const orderItems = [];
     const batchUpdates = [];
 
@@ -1232,15 +1504,13 @@ export const completePurchase = async (req, res) => {
 
       const expiryValue = item.expiry || null;
 
-      // Try to find existing item (from draft)
       let orderItem = await OrderItem.findOne({
-        order_id: order._id,
+        order_id: purchase._id,
         product_id: item.product_id,
         batch: item.batch,
       }).session(session);
 
       if (orderItem) {
-        // Update existing item
         orderItem.units = item.units;
         orderItem.unit_price = item.unit_price;
         orderItem.discount = item.discount || 0;
@@ -1248,11 +1518,10 @@ export const completePurchase = async (req, res) => {
         orderItem.expiry = expiryValue;
         await orderItem.save({ session });
       } else {
-        // Insert new item
         [orderItem] = await OrderItem.create(
           [
             {
-              order_id: order._id,
+              order_id: purchase._id,
               product_id: item.product_id,
               batch: item.batch,
               expiry: expiryValue,
@@ -1268,41 +1537,80 @@ export const completePurchase = async (req, res) => {
 
       orderItems.push(orderItem);
 
-      // Batch stock updates
-      batchUpdates.push({
-        updateOne: {
-          filter: { product_id: item.product_id, batch_number: item.batch },
-          update: {
-            $setOnInsert: {
-              product_id: item.product_id,
-              batch_number: item.batch,
-              purchase_price: item.unit_price,
-              expiry_date: expiryValue,
+      // 🔹 Check if same batch already exists to merge discounts/costs
+      const existingBatch = await Batch.findOne({
+        product_id: item.product_id,
+        batch_number: item.batch,
+      }).session(session);
+
+      if (existingBatch) {
+        // 🔹 Same Batch: Calculate weighted average for merge
+        const oldStock = existingBatch.stock || 0;
+        const newStock = item.units || 0;
+        const totalStock = oldStock + newStock;
+
+        const oldDiscountTotal = (existingBatch.discount_per_unit || 0) * oldStock;
+        const newDiscountTotal = item.discount || 0;
+        const mergedDiscountPerUnit = totalStock > 0 ? (oldDiscountTotal + newDiscountTotal) / totalStock : 0;
+
+        const oldCostTotal = (existingBatch.unit_cost || 0) * oldStock;
+        const newCostTotal = item.total || 0;
+        const mergedUnitCost = totalStock > 0 ? (oldCostTotal + newCostTotal) / totalStock : 0;
+
+        batchUpdates.push({
+          updateOne: {
+            filter: { product_id: item.product_id, batch_number: item.batch },
+            update: {
+              $set: {
+                unit_cost: mergedUnitCost,
+                discount_per_unit: mergedDiscountPerUnit,
+                expiry_date: expiryValue || existingBatch.expiry_date,
+              },
+              $inc: { stock: item.units },
             },
-            $set: {
-              unit_cost: item.units > 0 ? item.total / item.units : 0,
-              discount_per_unit:
-                item.units > 0 ? (item.discount || 0) / item.units : 0,
-            },
-            $inc: { stock: item.units },
           },
-          upsert: true,
-        },
-      });
+        });
+      } else {
+        // 🔹 New Batch: Fresh insert
+        batchUpdates.push({
+          updateOne: {
+            filter: { product_id: item.product_id, batch_number: item.batch },
+            update: {
+              $setOnInsert: {
+                product_id: item.product_id,
+                batch_number: item.batch,
+                purchase_price: item.unit_price,
+                expiry_date: expiryValue,
+              },
+              $set: {
+                unit_cost: item.units > 0 ? item.total / item.units : 0,
+                discount_per_unit:
+                  item.units > 0 ? (item.discount || 0) / item.units : 0,
+              },
+              $inc: { stock: item.units },
+            },
+            upsert: true,
+          },
+        });
+      }
     }
 
     if (batchUpdates.length) {
       await Batch.bulkWrite(batchUpdates, { session });
     }
 
+    /* =====================================================
+       5️⃣ Save & commit
+       ===================================================== */
+    await purchase.save({ session });
     await session.commitTransaction();
 
-    return successResponse(
-      res,
-      "Purchase order completed successfully",
-      { order, items: orderItems },
-      200
-    );
+    return res.json({
+      success: true,
+      message: "Purchase completed successfully",
+      purchase,
+      items: orderItems,
+    });
   } catch (err) {
     await session.abortTransaction();
     console.error("Complete purchase error:", err);
@@ -1323,7 +1631,7 @@ const purchaseController = {
   getPurchaseById,
   editPurchase,
   deletePurchase,
-  getLastTransactionByProduct,
+  getLastTransactionPurchaseByProduct,
   completePurchase,
 };
 
