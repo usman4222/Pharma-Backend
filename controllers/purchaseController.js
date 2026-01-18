@@ -163,34 +163,82 @@ const createPurchase = async (req, res) => {
       }).session(session);
 
       if (existingBatch) {
-        // 🔹 Same Batch: Calculate weighted average
         const oldStock = existingBatch.stock || 0;
         const newStock = item.units || 0;
+
+        // Keep existing discount by default
+        let finalDiscountPercentage = existingBatch.discount_percentage || 0;
+        let finalDiscountPerUnit = existingBatch.discount_per_unit || 0;
+
+        // Only update if user explicitly provided a discount
+        if (item.discount && item.discount > 0) {
+          // item.discount is the TOTAL discount amount for all units
+          const newDiscountPerUnit = item.discount / item.units;
+          const newDiscountPercentage = (newDiscountPerUnit / item.unit_price) * 100;
+
+          console.log('🔍 Discount Calculation Debug:', {
+            batchNumber: item.batch,
+            existingDiscountPercent: existingBatch.discount_percentage,
+            existingDiscountPerUnit: existingBatch.discount_per_unit,
+            oldStock: oldStock,
+            newStock: newStock,
+            newTotalDiscount: item.discount,
+            newUnits: item.units,
+            newUnitPrice: item.unit_price,
+            calculatedDiscountPerUnit: newDiscountPerUnit,
+            calculatedDiscountPercent: newDiscountPercentage,
+            difference: Math.abs(newDiscountPercentage - (existingBatch.discount_percentage || 0))
+          });
+
+          // Check if it's different from existing (0.1% tolerance)
+          if (Math.abs(newDiscountPercentage - (existingBatch.discount_percentage || 0)) > 0.1) {
+            // User wants to update the discount - MERGE using weighted average
+            const totalStock = oldStock + newStock;
+            finalDiscountPercentage = totalStock > 0
+              ? ((existingBatch.discount_percentage * oldStock) + (newDiscountPercentage * newStock)) / totalStock
+              : newDiscountPercentage;
+            finalDiscountPerUnit = totalStock > 0
+              ? ((existingBatch.discount_per_unit * oldStock) + (newDiscountPerUnit * newStock)) / totalStock
+              : newDiscountPerUnit;
+
+            console.log('✅ Merging discount:', {
+              oldDiscount: existingBatch.discount_percentage,
+              newDiscount: newDiscountPercentage,
+              mergedDiscount: finalDiscountPercentage
+            });
+          } else {
+            console.log('⏸️ Keeping existing discount:', existingBatch.discount_percentage);
+          }
+        } else {
+          console.log('⏸️ No discount provided, keeping existing:', existingBatch.discount_percentage);
+        }
+
+        // Cost still uses weighted average (this is correct for inventory valuation)
         const totalStock = oldStock + newStock;
-
-        const oldDiscountTotal = (existingBatch.discount_per_unit || 0) * oldStock;
-        const newDiscountTotal = item.discount || 0;
-        const mergedDiscountPerUnit = totalStock > 0 ? (oldDiscountTotal + newDiscountTotal) / totalStock : 0;
-
         const oldCostTotal = (existingBatch.unit_cost || 0) * oldStock;
         const newCostTotal = item.total || 0;
         const mergedUnitCost = totalStock > 0 ? (oldCostTotal + newCostTotal) / totalStock : 0;
 
+        // Update batch
         batchUpdates.push({
           updateOne: {
             filter: { product_id: item.product_id, batch_number: item.batch },
             update: {
               $set: {
                 unit_cost: mergedUnitCost,
-                discount_per_unit: mergedDiscountPerUnit,
-                expiry_date: expiryValue || existingBatch.expiry_date,
+                discount_percentage: Number(finalDiscountPercentage.toFixed(2)),
+                discount_per_unit: Number(finalDiscountPerUnit.toFixed(2)),
+                expiry_date: expiryValue || existingBatch.expiry_date
               },
-              $inc: { stock: item.units },
-            },
-          },
+              $inc: { stock: item.units }
+            }
+          }
         });
       } else {
-        // 🔹 New Batch: Don't link with other batches, just insert fresh
+        // New batch - unchanged
+        const newDiscountPerUnit = item.units > 0 ? (item.discount || 0) / item.units : 0;
+        const newDiscountPercentage = newDiscountPerUnit / item.unit_price * 100;
+
         batchUpdates.push({
           updateOne: {
             filter: { product_id: item.product_id, batch_number: item.batch },
@@ -203,8 +251,8 @@ const createPurchase = async (req, res) => {
               },
               $set: {
                 unit_cost: item.units > 0 ? item.total / item.units : 0,
-                discount_per_unit:
-                  item.units > 0 ? (item.discount || 0) / item.units : 0,
+                discount_per_unit: Number(newDiscountPerUnit.toFixed(2)),
+                discount_percentage: Number(newDiscountPercentage.toFixed(2)),
               },
               $inc: { stock: item.units },
             },
@@ -212,6 +260,8 @@ const createPurchase = async (req, res) => {
           },
         });
       }
+
+
     }
 
     if (batchUpdates.length) {
@@ -775,7 +825,6 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
   try {
     const { productId, supplierId, batch } = req.query;
 
-    // Validate input
     if (!productId) {
       return res.status(400).json({
         success: false,
@@ -783,17 +832,14 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
       });
     }
 
-    // Match conditions
     const itemMatch = {
       product_id: new mongoose.Types.ObjectId(productId),
     };
 
-    // If batch is provided, filter by it
     if (batch) {
-      itemMatch.batch = batch;
+      itemMatch.batch = batch; // this should be "IR-5"
     }
 
-    // Order match conditions
     const orderMatch = { type: "purchase" };
     if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
       orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
@@ -801,6 +847,8 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
+
+      // join orders + suppliers
       {
         $lookup: {
           from: "orders",
@@ -818,7 +866,10 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
               },
             },
             {
-              $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+              $unwind: {
+                path: "$supplier",
+                preserveNullAndEmptyArrays: true,
+              },
             },
             {
               $project: {
@@ -832,6 +883,40 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
         },
       },
       { $unwind: "$order" },
+
+      // join batches to get discount_per_unit
+      {
+        $lookup: {
+          from: "batches",
+          let: { pId: "$product_id", bNum: "$batch" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$product_id", "$$pId"] },
+                    { $eq: ["$batch_number", "$$bNum"] }, // batch_number = "IR-5"
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                discount_per_unit: 1,
+                purchase_price: 1,
+              },
+            },
+          ],
+          as: "batchDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$batchDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
       { $sort: { "order.createdAt": -1 } },
       { $limit: 1 },
     ]);
@@ -845,22 +930,36 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
 
     const item = lastItem[0];
 
-    // Calculate discount details
-    const discountPerUnit = item.units ? item.discount / item.units : 0;
-    const discountPercentage = item.unit_price
-      ? (discountPerUnit / item.unit_price) * 100
-      : 0;
+    // flat discount per unit from batch table
+    const discountPerUnit =
+      item.batchDoc?.discount_per_unit != null
+        ? item.batchDoc.discount_per_unit
+        : 0;
+
+    const tradePrice = item.unit_price; // or item.batchDoc.purchase_price if you prefer
+    const quantity = item.units;
+
+    // total discount = per-unit * quantity
+    const discountAmount = discountPerUnit * quantity;
+    const totalAmount = tradePrice * quantity;
+    // if you still want a "percentage" for UI:
+    const discountPercentage =
+      totalAmount > 0 ? (discountAmount / totalAmount) * 100 : 0;
 
     const data = {
       invoice_number: item.order.invoice_number,
       date: item.order.createdAt,
       supplier: item.order.supplier?.company_name || "N/A",
       type: item.order.type,
-      trade_price: item.unit_price,
-      quantity: item.units,
-      discount_total: item.discount,
+
+      trade_price: tradePrice,
+      quantity,
+
+      // from batch
       discount_per_unit: discountPerUnit,
-      discount_percentage: discountPercentage.toFixed(2),
+      discount_amount: discountAmount.toFixed(2),
+      discount_percentage: Number(discountPercentage.toFixed(2)),
+
       batch: item.batch,
     };
 
@@ -877,6 +976,7 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
     });
   }
 };
+
 
 // Get purchase by ID
 const getPurchaseById = async (req, res) => {
