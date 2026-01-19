@@ -996,88 +996,96 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       itemMatch.batch = batch;
     }
 
-    const orderMatch = { type: "sale" };
+    // 1. Try to find last sale for THIS specific supplier/customer
+    let lastItem = [];
+
     if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
-      orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
-    }
+      const supplierOrderMatch = {
+        type: "sale",
+        supplier_id: new mongoose.Types.ObjectId(supplierId)
+      };
 
-    const lastItem = await OrderItemModel.aggregate([
-      { $match: itemMatch },
-
-      // join orders + suppliers
-      {
-        $lookup: {
-          from: "orders",
-          localField: "order_id",
-          foreignField: "_id",
-          as: "order",
-          pipeline: [
-            { $match: orderMatch },
-            {
-              $lookup: {
-                from: "suppliers",
-                localField: "supplier_id",
-                foreignField: "_id",
-                as: "supplier",
-              },
-            },
-            {
-              $unwind: {
-                path: "$supplier",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-            {
-              $project: {
-                invoice_number: 1,
-                createdAt: 1,
-                type: 1,
-                "supplier.company_name": 1,
-              },
-            },
-          ],
-        },
-      },
-      { $unwind: "$order" },
-
-      // join batches to get CURRENT merged discount
-      {
-        $lookup: {
-          from: "batches",
-          let: { pId: "$product_id", bNum: "$batch" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$product_id", "$$pId"] },
-                    { $eq: ["$batch_number", "$$bNum"] },
-                  ],
+      lastItem = await OrderItemModel.aggregate([
+        { $match: itemMatch },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "order_id",
+            foreignField: "_id",
+            as: "order",
+            pipeline: [
+              { $match: supplierOrderMatch }, // Match specific supplier
+              {
+                $lookup: {
+                  from: "suppliers",
+                  localField: "supplier_id",
+                  foreignField: "_id",
+                  as: "supplier",
                 },
               },
-            },
-            {
-              $project: {
-                discount_per_unit: 1,
-                discount_percentage: 1,
-                purchase_price: 1,
+              {
+                $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
               },
-            },
-          ],
-          as: "batchDoc",
+              {
+                $project: {
+                  invoice_number: 1,
+                  createdAt: 1,
+                  type: 1,
+                  "supplier.company_name": 1,
+                },
+              },
+            ],
+          },
         },
-      },
-      {
-        $unwind: {
-          path: "$batchDoc",
-          preserveNullAndEmptyArrays: true,
+        { $unwind: "$order" }, // Filter out non-matching orders
+        { $sort: { "order.createdAt": -1 } },
+        { $limit: 1 },
+      ]);
+    }
+
+    // 2. If no sale found for specific supplier (or no supplier provided), finding GLOBAL last sale
+    if (!lastItem.length) {
+      const globalOrderMatch = { type: "sale" };
+
+      lastItem = await OrderItemModel.aggregate([
+        { $match: itemMatch },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "order_id",
+            foreignField: "_id",
+            as: "order",
+            pipeline: [
+              { $match: globalOrderMatch }, // Match ANY sale
+              {
+                $lookup: {
+                  from: "suppliers",
+                  localField: "supplier_id",
+                  foreignField: "_id",
+                  as: "supplier",
+                },
+              },
+              {
+                $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+              },
+              {
+                $project: {
+                  invoice_number: 1,
+                  createdAt: 1,
+                  type: 1,
+                  "supplier.company_name": 1,
+                },
+              },
+            ],
+          },
         },
-      },
+        { $unwind: "$order" },
+        { $sort: { "order.createdAt": -1 } },
+        { $limit: 1 },
+      ]);
+    }
 
-      { $sort: { "order.createdAt": -1 } },
-      { $limit: 1 },
-    ]);
-
+    // If still no transaction found
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
@@ -1085,7 +1093,15 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       });
     }
 
+    // Retrieve batch info for checking current batch discount
+    // We do this separately or reuse the item found
     const item = lastItem[0];
+
+    // Fetch batch doc for the item's batch to get current merged discount
+    const batchDoc = await Batch.findOne({
+      product_id: item.product_id,
+      batch_number: item.batch
+    }).lean();
 
     // ✅ LAST TRANSACTION DISCOUNT (what user paid in their last purchase/sale)
     const lastTransactionDiscount = item.discount || 0;
@@ -1099,8 +1115,8 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       : 0;
 
     // ✅ CURRENT BATCH DISCOUNT (merged/weighted average)
-    const batchDiscountPerUnit = item.batchDoc?.discount_per_unit || 0;
-    const batchDiscountPercentage = item.batchDoc?.discount_percentage || 0;
+    const batchDiscountPerUnit = batchDoc?.discount_per_unit || 0;
+    const batchDiscountPercentage = batchDoc?.discount_percentage || 0;
 
     const data = {
       invoice_number: item.order.invoice_number,
@@ -1121,7 +1137,7 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       batch_discount_percentage: Number(batchDiscountPercentage.toFixed(2)),
 
       // Legacy fields (for backward compatibility)
-      discount_total: Number(lastTransactionDiscount.toFixed(2)), // Old field name
+      discount_total: Number(lastTransactionDiscount.toFixed(2)),
       discount_amount: Number(lastTransactionDiscount.toFixed(2)),
       discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
       discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
