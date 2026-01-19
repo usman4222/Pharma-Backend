@@ -981,7 +981,6 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
   try {
     const { productId, supplierId, batch } = req.query;
 
-    // Validate input
     if (!productId) {
       return res.status(400).json({
         success: false,
@@ -989,15 +988,14 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       });
     }
 
-    // Match the product and optionally the batch
     const itemMatch = {
       product_id: new mongoose.Types.ObjectId(productId),
     };
+
     if (batch) {
       itemMatch.batch = batch;
     }
 
-    // Match only SALE orders and optionally the supplier (customer)
     const orderMatch = { type: "sale" };
     if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
       orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
@@ -1005,6 +1003,8 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
 
     const lastItem = await OrderItemModel.aggregate([
       { $match: itemMatch },
+
+      // join orders + suppliers
       {
         $lookup: {
           from: "orders",
@@ -1022,7 +1022,10 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
               },
             },
             {
-              $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+              $unwind: {
+                path: "$supplier",
+                preserveNullAndEmptyArrays: true,
+              },
             },
             {
               $project: {
@@ -1036,6 +1039,41 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
         },
       },
       { $unwind: "$order" },
+
+      // join batches to get CURRENT merged discount
+      {
+        $lookup: {
+          from: "batches",
+          let: { pId: "$product_id", bNum: "$batch" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$product_id", "$$pId"] },
+                    { $eq: ["$batch_number", "$$bNum"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                discount_per_unit: 1,
+                discount_percentage: 1,
+                purchase_price: 1,
+              },
+            },
+          ],
+          as: "batchDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$batchDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
       { $sort: { "order.createdAt": -1 } },
       { $limit: 1 },
     ]);
@@ -1049,23 +1087,44 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
 
     const item = lastItem[0];
 
-    // Calculate discount details
-    const discountPerUnit = item.units ? item.discount / item.units : 0;
-    const discountPercentage = item.unit_price
-      ? (discountPerUnit / item.unit_price) * 100
+    // ✅ LAST TRANSACTION DISCOUNT (what user paid in their last purchase/sale)
+    const lastTransactionDiscount = item.discount || 0;
+    const tradePrice = item.unit_price;
+    const quantity = item.units;
+    const totalAmount = tradePrice * quantity;
+
+    const lastTransactionDiscountPerUnit = quantity > 0 ? lastTransactionDiscount / quantity : 0;
+    const lastTransactionDiscountPercentage = totalAmount > 0
+      ? (lastTransactionDiscount / totalAmount) * 100
       : 0;
+
+    // ✅ CURRENT BATCH DISCOUNT (merged/weighted average)
+    const batchDiscountPerUnit = item.batchDoc?.discount_per_unit || 0;
+    const batchDiscountPercentage = item.batchDoc?.discount_percentage || 0;
 
     const data = {
       invoice_number: item.order.invoice_number,
       date: item.order.createdAt,
       supplier: item.order.supplier?.company_name || "N/A",
       type: item.order.type,
-      trade_price: item.unit_price,
-      quantity: item.units,
-      discount_total: item.discount,
-      discount_per_unit: discountPerUnit,
-      discount_percentage: discountPercentage.toFixed(2),
+      trade_price: tradePrice,
+      quantity,
       batch: item.batch,
+
+      // ✅ Last transaction discount (what user actually paid last time)
+      last_transaction_discount_amount: Number(lastTransactionDiscount.toFixed(2)),
+      last_transaction_discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
+      last_transaction_discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
+
+      // ✅ Current batch discount (merged/weighted average)
+      batch_discount_per_unit: Number(batchDiscountPerUnit.toFixed(2)),
+      batch_discount_percentage: Number(batchDiscountPercentage.toFixed(2)),
+
+      // Legacy fields (for backward compatibility)
+      discount_total: Number(lastTransactionDiscount.toFixed(2)), // Old field name
+      discount_amount: Number(lastTransactionDiscount.toFixed(2)),
+      discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
+      discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
     };
 
     return res.status(200).json({

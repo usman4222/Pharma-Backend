@@ -837,7 +837,7 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
     };
 
     if (batch) {
-      itemMatch.batch = batch; // this should be "IR-5"
+      itemMatch.batch = batch;
     }
 
     const orderMatch = { type: "purchase" };
@@ -884,7 +884,7 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
       },
       { $unwind: "$order" },
 
-      // join batches to get discount_per_unit
+      // join batches to get CURRENT merged discount
       {
         $lookup: {
           from: "batches",
@@ -895,7 +895,7 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$product_id", "$$pId"] },
-                    { $eq: ["$batch_number", "$$bNum"] }, // batch_number = "IR-5"
+                    { $eq: ["$batch_number", "$$bNum"] },
                   ],
                 },
               },
@@ -903,6 +903,7 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
             {
               $project: {
                 discount_per_unit: 1,
+                discount_percentage: 1,
                 purchase_price: 1,
               },
             },
@@ -924,43 +925,49 @@ export const getLastTransactionPurchaseByProduct = async (req, res) => {
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
-        message: "No previous SALE transaction found for this product",
+        message: "No previous purchase transaction found for this product",
       });
     }
 
     const item = lastItem[0];
 
-    // flat discount per unit from batch table
-    const discountPerUnit =
-      item.batchDoc?.discount_per_unit != null
-        ? item.batchDoc.discount_per_unit
-        : 0;
-
-    const tradePrice = item.unit_price; // or item.batchDoc.purchase_price if you prefer
+    // ✅ LAST TRANSACTION DISCOUNT (what user paid in their last purchase)
+    const lastTransactionDiscount = item.discount || 0;
+    const tradePrice = item.unit_price;
     const quantity = item.units;
-
-    // total discount = per-unit * quantity
-    const discountAmount = discountPerUnit * quantity;
     const totalAmount = tradePrice * quantity;
-    // if you still want a "percentage" for UI:
-    const discountPercentage =
-      totalAmount > 0 ? (discountAmount / totalAmount) * 100 : 0;
+
+    const lastTransactionDiscountPerUnit = quantity > 0 ? lastTransactionDiscount / quantity : 0;
+    const lastTransactionDiscountPercentage = totalAmount > 0
+      ? (lastTransactionDiscount / totalAmount) * 100
+      : 0;
+
+    // ✅ CURRENT BATCH DISCOUNT (merged/weighted average)
+    const batchDiscountPerUnit = item.batchDoc?.discount_per_unit || 0;
+    const batchDiscountPercentage = item.batchDoc?.discount_percentage || 0;
 
     const data = {
       invoice_number: item.order.invoice_number,
       date: item.order.createdAt,
       supplier: item.order.supplier?.company_name || "N/A",
       type: item.order.type,
-
       trade_price: tradePrice,
       quantity,
-
-      // from batch
-      discount_per_unit: discountPerUnit,
-      discount_amount: discountAmount.toFixed(2),
-      discount_percentage: Number(discountPercentage.toFixed(2)),
-
       batch: item.batch,
+
+      // ✅ Last transaction discount (what user actually paid last time)
+      last_transaction_discount_amount: Number(lastTransactionDiscount.toFixed(2)),
+      last_transaction_discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
+      last_transaction_discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
+
+      // ✅ Current batch discount (merged/weighted average)
+      batch_discount_per_unit: Number(batchDiscountPerUnit.toFixed(2)),
+      batch_discount_percentage: Number(batchDiscountPercentage.toFixed(2)),
+
+      // Legacy fields (for backward compatibility)
+      discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
+      discount_amount: Number(lastTransactionDiscount.toFixed(2)),
+      discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
     };
 
     return res.status(200).json({
