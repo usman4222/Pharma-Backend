@@ -243,8 +243,8 @@ export const createCustomer = async (req, res) => {
     }
 
     //Opening balance will directly become the receive amount
-    const finalReceive = balanceType === 'receive' ? opening_balance : 0;
     const finalPay = balanceType === 'pay' ? opening_balance : 0;
+    const finalReceive = balanceType === 'receive' ? opening_balance : 0;
 
     //Prepare supplier data
     const customerData = {

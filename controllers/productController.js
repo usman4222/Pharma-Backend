@@ -738,6 +738,8 @@ export const getProductTransactions = async (req, res) => {
       { $sort: { date: 1, item_created_at: 1 } }
     ]);
 
+    console.log(allTransactions);
+
     // 🔹 Calculate running balance (stock ledger)
     let runningBalance = 0;
     const transactionsWithBalance = allTransactions.map((transaction, index) => {
@@ -766,6 +768,15 @@ export const getProductTransactions = async (req, res) => {
           break;
       }
 
+      // Calculate discount percentage
+      const units = transaction.units || 0;
+      const unitPrice = transaction.unit_price || 0;
+      const discount = transaction.discount || 0;
+      const totalBeforeDiscount = unitPrice * units;
+      const discountPercentage = totalBeforeDiscount > 0
+        ? Number(((discount / totalBeforeDiscount) * 100).toFixed(2))
+        : 0;
+
       return {
         transaction_no: index + 1,
         date: transaction.date,
@@ -778,6 +789,7 @@ export const getProductTransactions = async (req, res) => {
         stock_out: stockOut,
         unit_price: transaction.unit_price,
         discount: transaction.discount || 0,
+        discount_percentage: discountPercentage, // ← Added
         total_value: transaction.total,
         running_balance: runningBalance,
         status: transaction.status,
@@ -802,6 +814,7 @@ export const getProductTransactions = async (req, res) => {
         .filter(t => t.type === "sale")
         .reduce((sum, t) => sum + t.total_value, 0),
       total_profit: transactionsWithBalance.reduce((sum, t) => sum + t.profit, 0),
+      total_discount: transactionsWithBalance.reduce((sum, t) => sum + t.discount, 0), // ← Added
       purchases_count: transactionsWithBalance.filter(t => t.type === "purchase").length,
       sales_count: transactionsWithBalance.filter(t => t.type === "sale").length,
       returns_count: transactionsWithBalance.filter(t =>
@@ -833,6 +846,7 @@ export const getProductTransactions = async (req, res) => {
     return sendError(res, "Failed to fetch product transactions", 500);
   }
 };
+
 
 
 

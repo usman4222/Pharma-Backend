@@ -337,7 +337,7 @@ const getAllPurchases = async (req, res) => {
     const orderItems = await OrderItem.find({ order_id: { $in: purchaseIds } })
       .populate({
         path: "product_id",
-        select: "name sales_tax sales_tax_percentage pack_size_id",
+        select: "name sales_tax sales_tax_percentage pack_size_id retail_price trade_price",
         populate: {
           path: "pack_size_id",
           model: "PackSize",
