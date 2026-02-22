@@ -62,10 +62,10 @@ const createSale = async (req, res) => {
     }
 
     // Ensure paid amount is not greater than total
-    if (Number(paid_amount) > Number(total)) {
-      await session.abortTransaction();
-      return sendError(res, "Paid amount cannot be greater than total", 400);
-    }
+    // if (Number(paid_amount) > Number(total)) {
+    //   await session.abortTransaction();
+    //   return sendError(res, "Paid amount cannot be greater than total", 400);
+    // }
 
     // 2. Validate batch numbers
     for (const item of items) {
@@ -123,7 +123,15 @@ const createSale = async (req, res) => {
     }
 
     // 6. Create order with recovery logic
-    const actualDue = total - paid_amount;
+    // calculate the amount that belongs to this specific sale (without previous balance)
+    const actualDueForOrder = Number(total) - Number(paid_amount);
+
+    // Determine what the final customer balance will be after adding this order
+    // We'll use the same helper to compute updated pay/receive, then use the pay
+    // value as the due_amount that we store on the order (just like purchases).
+    const prevPay = supplierDoc.pay || 0;
+    const prevReceive = supplierDoc.receive || 0;
+    const balanceResult = adjustPayReceive(prevPay, prevReceive, actualDueForOrder, 0);
 
     const orderData = {
       invoice_number,
@@ -132,7 +140,9 @@ const createSale = async (req, res) => {
       subtotal,
       total,
       paid_amount,
-      due_amount: actualDue,
+      // due_amount on the order should represent the customer's balance after
+      // this sale (matching what the frontend sends for purchases)
+      due_amount: balanceResult.pay || 0,
       net_value,
       note,
       due_date,
@@ -245,6 +255,7 @@ const createSale = async (req, res) => {
     );
 
     // 8. Adjust supplier balances
+    // the helper is defined earlier above so we can reuse it if needed; leave as-is
     function adjustPayReceive(
       currentPay,
       currentReceive,
@@ -265,16 +276,17 @@ const createSale = async (req, res) => {
       return { pay, receive };
     }
 
-    const { pay, receive } = adjustPayReceive(
-      supplierDoc.pay || 0,
-      supplierDoc.receive || 0,
-      actualDue,
+    // update using the amount that belongs to this order only
+    const { pay: updatedPay, receive: updatedReceive } = adjustPayReceive(
+      prevPay,
+      prevReceive,
+      actualDueForOrder,
       0
     );
 
     await Supplier.findByIdAndUpdate(
       supplier_id,
-      { pay, receive },
+      { pay: updatedPay, receive: updatedReceive },
       { session }
     );
 
