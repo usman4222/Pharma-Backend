@@ -1008,114 +1008,98 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       itemMatch.batch = batch;
     }
 
-    // 1. Try to find last sale for THIS specific supplier/customer
-    let lastItem = [];
-
+    const orderMatch = { type: "sale" };
     if (supplierId && mongoose.Types.ObjectId.isValid(supplierId)) {
-      const supplierOrderMatch = {
-        type: "sale",
-        supplier_id: new mongoose.Types.ObjectId(supplierId)
-      };
-
-      lastItem = await OrderItemModel.aggregate([
-        { $match: itemMatch },
-        {
-          $lookup: {
-            from: "orders",
-            localField: "order_id",
-            foreignField: "_id",
-            as: "order",
-            pipeline: [
-              { $match: supplierOrderMatch }, // Match specific supplier
-              {
-                $lookup: {
-                  from: "suppliers",
-                  localField: "supplier_id",
-                  foreignField: "_id",
-                  as: "supplier",
-                },
-              },
-              {
-                $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
-              },
-              {
-                $project: {
-                  invoice_number: 1,
-                  createdAt: 1,
-                  type: 1,
-                  "supplier.company_name": 1,
-                },
-              },
-            ],
-          },
-        },
-        { $unwind: "$order" }, // Filter out non-matching orders
-        { $sort: { "order.createdAt": -1 } },
-        { $limit: 1 },
-      ]);
+      orderMatch.supplier_id = new mongoose.Types.ObjectId(supplierId);
     }
 
-    // 2. If no sale found for specific supplier (or no supplier provided), finding GLOBAL last sale
-    if (!lastItem.length) {
-      const globalOrderMatch = { type: "sale" };
+    const lastItem = await OrderItemModel.aggregate([
+      { $match: itemMatch },
 
-      lastItem = await OrderItemModel.aggregate([
-        { $match: itemMatch },
-        {
-          $lookup: {
-            from: "orders",
-            localField: "order_id",
-            foreignField: "_id",
-            as: "order",
-            pipeline: [
-              { $match: globalOrderMatch }, // Match ANY sale
-              {
-                $lookup: {
-                  from: "suppliers",
-                  localField: "supplier_id",
-                  foreignField: "_id",
-                  as: "supplier",
-                },
+      // join orders + suppliers
+      {
+        $lookup: {
+          from: "orders",
+          localField: "order_id",
+          foreignField: "_id",
+          as: "order",
+          pipeline: [
+            { $match: orderMatch },
+            {
+              $lookup: {
+                from: "suppliers",
+                localField: "supplier_id",
+                foreignField: "_id",
+                as: "supplier",
               },
-              {
-                $unwind: { path: "$supplier", preserveNullAndEmptyArrays: true },
+            },
+            {
+              $unwind: {
+                path: "$supplier",
+                preserveNullAndEmptyArrays: true,
               },
-              {
-                $project: {
-                  invoice_number: 1,
-                  createdAt: 1,
-                  type: 1,
-                  "supplier.company_name": 1,
-                },
+            },
+            {
+              $project: {
+                invoice_number: 1,
+                createdAt: 1,
+                type: 1,
+                "supplier.company_name": 1,
               },
-            ],
-          },
+            },
+          ],
         },
-        { $unwind: "$order" },
-        { $sort: { "order.createdAt": -1 } },
-        { $limit: 1 },
-      ]);
-    }
+      },
+      { $unwind: "$order" },
 
-    // If still no transaction found
+      // join batches to get CURRENT merged discount
+      {
+        $lookup: {
+          from: "batches",
+          let: { pId: "$product_id", bNum: "$batch" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$product_id", "$$pId"] },
+                    { $eq: ["$batch_number", "$$bNum"] },
+                  ],
+                },
+              },
+            },
+            {
+              $project: {
+                discount_per_unit: 1,
+                discount_percentage: 1,
+                purchase_price: 1,
+              },
+            },
+          ],
+          as: "batchDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$batchDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      { $sort: { "order.createdAt": -1 } },
+      { $limit: 1 },
+    ]);
+
     if (!lastItem.length) {
       return res.status(404).json({
         success: false,
-        message: "No previous SALE transaction found matching these criteria",
+        message: "No previous sale transaction found for this product",
       });
     }
 
-    // Retrieve batch info for checking current batch discount
-    // We do this separately or reuse the item found
     const item = lastItem[0];
 
-    // Fetch batch doc for the item's batch to get current merged discount
-    const batchDoc = await Batch.findOne({
-      product_id: item.product_id,
-      batch_number: item.batch
-    }).lean();
-
-    // ✅ LAST TRANSACTION DISCOUNT (what user paid in their last purchase/sale)
+    // ✅ LAST TRANSACTION DISCOUNT
     const lastTransactionDiscount = item.discount || 0;
     const tradePrice = item.unit_price;
     const quantity = item.units;
@@ -1126,9 +1110,9 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       ? (lastTransactionDiscount / totalAmount) * 100
       : 0;
 
-    // ✅ CURRENT BATCH DISCOUNT (merged/weighted average)
-    const batchDiscountPerUnit = batchDoc?.discount_per_unit || 0;
-    const batchDiscountPercentage = batchDoc?.discount_percentage || 0;
+    // ✅ CURRENT BATCH DISCOUNT
+    const batchDiscountPerUnit = item.batchDoc?.discount_per_unit || 0;
+    const batchDiscountPercentage = item.batchDoc?.discount_percentage || 0;
 
     const data = {
       invoice_number: item.order.invoice_number,
@@ -1139,19 +1123,18 @@ export const getLastSaleTransactionByProduct = async (req, res) => {
       quantity,
       batch: item.batch,
 
-      // ✅ Last transaction discount (what user actually paid last time)
+      // ✅ Last transaction discount
       last_transaction_discount_amount: Number(lastTransactionDiscount.toFixed(2)),
       last_transaction_discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
       last_transaction_discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
 
-      // ✅ Current batch discount (merged/weighted average)
+      // ✅ Current batch discount
       batch_discount_per_unit: Number(batchDiscountPerUnit.toFixed(2)),
       batch_discount_percentage: Number(batchDiscountPercentage.toFixed(2)),
 
-      // Legacy fields (for backward compatibility)
-      discount_total: Number(lastTransactionDiscount.toFixed(2)),
-      discount_amount: Number(lastTransactionDiscount.toFixed(2)),
+      // Legacy fields
       discount_per_unit: Number(lastTransactionDiscountPerUnit.toFixed(2)),
+      discount_amount: Number(lastTransactionDiscount.toFixed(2)),
       discount_percentage: Number(lastTransactionDiscountPercentage.toFixed(2)),
     };
 
