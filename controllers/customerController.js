@@ -50,8 +50,20 @@ export const getAllCustomers = async (req, res) => {
 
     // Process each customer
     customers.forEach((customer) => {
-      const debit = customer.pay || 0;      // customer owes us
-      const credit = customer.receive || 0; // we owe customer
+      // const debit = customer.pay || 0;      // customer owes us
+      // const credit = customer.receive || 0; // we owe customer
+      let debit = 0;
+      let credit = 0;
+
+      if (customer.role === "customer") {
+        debit = customer.pay || 0;
+        credit = customer.receive || 0;
+      }
+
+      if (customer.role === "both" && customer.balanceType === "receive") {
+        debit = customer.pay || 0;
+        credit = customer.receive || 0;
+      }
       const updatedAt = new Date(customer.updatedAt || customer.createdAt);
 
       // --- ALL ---
@@ -133,22 +145,19 @@ export const getAllCustomers = async (req, res) => {
   }
 };
 
-
-
 export const getAllActiveCustomers = async (req, res) => {
   try {
     const filter = {
       $and: [
         { status: "active" },
-        { $or: [{ role: "customer" }, { role: "both" }] }
-      ]
+        { $or: [{ role: "customer" }, { role: "both" }] },
+      ],
     };
 
-
-    // Fetch all matching customers 
+    // Fetch all matching customers
     const customers = await SupplierModel.find(filter)
-      .populate('area_id', 'name city description')
-      .populate('booker_id', 'name');
+      .populate("area_id", "name city description")
+      .populate("booker_id", "name");
 
     // Total count of customers (optional, just for info)
     const totalCustomers = customers.length;
@@ -180,8 +189,9 @@ export const getCustomerList = async (req, res) => {
 // Get single customer for edit
 export const editCustomer = async (req, res) => {
   try {
-    const customer = await SupplierModel.findById(req.params.id)
-      .populate("area_id city_id booker_id");
+    const customer = await SupplierModel.findById(req.params.id).populate(
+      "area_id city_id booker_id",
+    );
 
     if (!customer) return sendError(res, "Customer not found", 404);
 
@@ -195,7 +205,7 @@ export const editCustomer = async (req, res) => {
 // Show customer with purchases (optional)
 export const showCustomer = async (req, res) => {
   try {
-    const customer = await SupplierModel.findById(req.params.id)
+    const customer = await SupplierModel.findById(req.params.id);
     //   .populate("booker_id");
 
     if (!customer) return sendError(res, "Customer not found", 404);
@@ -235,7 +245,7 @@ export const createCustomer = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
-      licence_photo
+      licence_photo,
     } = req.body || {};
 
     if (!company_name || !city || !role) {
@@ -243,8 +253,8 @@ export const createCustomer = async (req, res) => {
     }
 
     //Opening balance will directly become the receive amount
-    const finalPay = balanceType === 'pay' ? opening_balance : 0;
-    const finalReceive = balanceType === 'receive' ? opening_balance : 0;
+    const finalPay = balanceType === "pay" ? opening_balance : 0;
+    const finalReceive = balanceType === "receive" ? opening_balance : 0;
 
     //Prepare supplier data
     const customerData = {
@@ -282,8 +292,6 @@ export const createCustomer = async (req, res) => {
   }
 };
 
-
-
 // Update customer
 export const updateCustomer = async (req, res) => {
   try {
@@ -292,7 +300,7 @@ export const updateCustomer = async (req, res) => {
     // Ensure area_id is stored as array of ObjectIds
     if (updateData.area_id) {
       updateData.area_id = Array.isArray(updateData.area_id)
-        ? updateData.area_id.map(id => new mongoose.Types.ObjectId(id))
+        ? updateData.area_id.map((id) => new mongoose.Types.ObjectId(id))
         : [new mongoose.Types.ObjectId(updateData.area_id)];
     }
 
@@ -303,12 +311,14 @@ export const updateCustomer = async (req, res) => {
     const updatedCustomer = await SupplierModel.findByIdAndUpdate(
       req.params.id,
       updateData,
-      { new: true, runValidators: true } // Return updated document and run validators
+      { new: true, runValidators: true }, // Return updated document and run validators
     );
 
     if (!updatedCustomer) return sendError(res, "Customer not found", 404);
 
-    return successResponse(res, "Customer updated successfully", { customer: updatedCustomer });
+    return successResponse(res, "Customer updated successfully", {
+      customer: updatedCustomer,
+    });
   } catch (error) {
     console.error("Update Customer Error:", error.message);
     return sendError(res, "Failed to update customer", 500);

@@ -47,8 +47,20 @@ export const getAllSuppliers = async (req, res) => {
     todayEnd.setHours(23, 59, 59, 999);
 
     suppliers.forEach((supplier) => {
-      const debit = supplier.pay || 0;     // we pay supplier
-      const credit = supplier.receive || 0; // supplier pays us
+      // const debit = supplier.pay || 0;     // we pay supplier
+      // const credit = supplier.receive || 0; // supplier pays us
+      let debit = 0;
+      let credit = 0;
+
+      if (supplier.role === "supplier") {
+        debit = supplier.pay || 0;
+        credit = supplier.receive || 0;
+      }
+
+      if (supplier.role === "both" && supplier.balanceType === "pay") {
+        debit = supplier.pay || 0;
+        credit = supplier.receive || 0;
+      }
       const updatedAt = new Date(supplier.updatedAt || supplier.createdAt);
 
       // --- ALL ---
@@ -130,9 +142,6 @@ export const getAllSuppliers = async (req, res) => {
   }
 };
 
-
-
-
 export const getAllActiveSuppliers = async (req, res) => {
   try {
     const filter = {
@@ -141,7 +150,10 @@ export const getAllActiveSuppliers = async (req, res) => {
     };
 
     // Get all suppliers ()
-    const suppliers = await SupplierModel.find(filter).populate('area_id', 'name city description');
+    const suppliers = await SupplierModel.find(filter).populate(
+      "area_id",
+      "name city description",
+    );
 
     const totalSuppliers = suppliers.length;
 
@@ -155,38 +167,38 @@ export const getAllActiveSuppliers = async (req, res) => {
   }
 };
 
-
 export const getAllActiveSuppliersAndCustomers = async (req, res) => {
   try {
     const filter = {
       status: "active",
-      $or: [
-        { role: "supplier" },
-        { role: "customer" },
-        { role: "both" }
-      ],
+      $or: [{ role: "supplier" }, { role: "customer" }, { role: "both" }],
     };
 
     // Fetch all active suppliers, customers, and both
     const data = await SupplierModel.find(filter)
       .populate("area_id", "name city description")
-      .populate("booker_id", "name"); 
+      .populate("booker_id", "name");
 
-    return successResponse(res, "Suppliers and Customers fetched successfully", {
-      data,
-      totalItems: data.length,
-    });
+    return successResponse(
+      res,
+      "Suppliers and Customers fetched successfully",
+      {
+        data,
+        totalItems: data.length,
+      },
+    );
   } catch (error) {
     console.error("Fetch Suppliers/Customers Error:", error);
     return sendError(res, "Failed to fetch suppliers and customers", 500);
   }
 };
 
-
 export const getSupplierById = async (req, res) => {
   try {
-    const supplier = await SupplierModel.findById(req.params.id)
-      .populate('area_id', 'name')
+    const supplier = await SupplierModel.findById(req.params.id).populate(
+      "area_id",
+      "name",
+    );
     if (!supplier) return sendError(res, "Supplier not found", 404);
     return successResponse(res, "Supplier fetched", { supplier });
   } catch (error) {
@@ -218,13 +230,12 @@ export const createSupplier = async (req, res) => {
       credit_limit,
       cnic,
       booker_id,
-      licence_photo
+      licence_photo,
     } = req.body || {};
 
     if (!company_name || !city || !role) {
       return sendError(res, "Company Name, City and Role is required.");
     }
-
 
     // 📦 Prepare supplier data
     const supplierData = {
@@ -343,7 +354,11 @@ export const addSupplierBalance = async (req, res) => {
     const { supplierId, balanceType, amount } = req.body;
 
     if (!supplierId || !balanceType || typeof amount !== "number") {
-      return sendError(res, "supplierId, balanceType, and amount are required", 400);
+      return sendError(
+        res,
+        "supplierId, balanceType, and amount are required",
+        400,
+      );
     }
 
     const supplier = await SupplierModel.findById(supplierId);
@@ -376,7 +391,11 @@ export const addSupplierBalance = async (req, res) => {
         supplier.receive += amount;
       }
     } else {
-      return sendError(res, "balanceType must be either 'pay' or 'receive'", 400);
+      return sendError(
+        res,
+        "balanceType must be either 'pay' or 'receive'",
+        400,
+      );
     }
 
     await supplier.save();
@@ -388,7 +407,6 @@ export const addSupplierBalance = async (req, res) => {
   }
 };
 
-
 const supplierController = {
   getAllSuppliers,
   getSupplierById,
@@ -399,7 +417,7 @@ const supplierController = {
   searchSuppliers,
   toggleSupplierStatus,
   addSupplierBalance,
-  getAllActiveSuppliersAndCustomers
+  getAllActiveSuppliersAndCustomers,
 };
 
 export default supplierController;
