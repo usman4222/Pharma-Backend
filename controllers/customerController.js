@@ -55,14 +55,22 @@ export const getAllCustomers = async (req, res) => {
       let debit = 0;
       let credit = 0;
 
+      const pay = customer.pay || 0;
+      const receive = customer.receive || 0;
+
       if (customer.role === "customer") {
-        debit = customer.pay || 0;
-        credit = customer.receive || 0;
+        const balance = pay - receive;
+
+        if (balance > 0) debit = balance;
+        else if (balance < 0) credit = Math.abs(balance);
       }
 
+      // If role is BOTH → only count CUSTOMER side
       if (customer.role === "both" && customer.balanceType === "receive") {
-        debit = customer.pay || 0;
-        credit = customer.receive || 0;
+        const balance = pay - receive;
+
+        if (balance > 0) debit = balance;
+        else if (balance < 0) credit = Math.abs(balance);
       }
       const updatedAt = new Date(customer.updatedAt || customer.createdAt);
 

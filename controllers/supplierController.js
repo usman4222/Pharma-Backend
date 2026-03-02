@@ -52,14 +52,22 @@ export const getAllSuppliers = async (req, res) => {
       let debit = 0;
       let credit = 0;
 
+      const pay = supplier.pay || 0;
+      const receive = supplier.receive || 0;
+
       if (supplier.role === "supplier") {
-        debit = supplier.pay || 0;
-        credit = supplier.receive || 0;
+        const balance = pay - receive;
+
+        if (balance > 0) debit = balance;
+        else if (balance < 0) credit = Math.abs(balance);
       }
 
+      // If role is BOTH → only count SUPPLIER side
       if (supplier.role === "both" && supplier.balanceType === "pay") {
-        debit = supplier.pay || 0;
-        credit = supplier.receive || 0;
+        const balance = pay - receive;
+
+        if (balance > 0) debit = balance;
+        else if (balance < 0) credit = Math.abs(balance);
       }
       const updatedAt = new Date(supplier.updatedAt || supplier.createdAt);
 
