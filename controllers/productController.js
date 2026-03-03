@@ -239,6 +239,52 @@ export const getAllProducts = async (req, res) => {
               }
             ]
           }
+          ,
+          // Compute last purchase info (price and discount%) without exposing full purchase object
+          lastPurchasePrice: {
+            $let: {
+              vars: {
+                lastItem: { $arrayElemAt: [ { $sortArray: { input: "$purchaseItems", sortBy: { "order.createdAt": -1 } } }, 0 ] }
+              },
+              in: {
+                $let: {
+                  vars: {
+                    units: { $ifNull: ["$$lastItem.units", 0] },
+                    unit_price: { $ifNull: ["$$lastItem.unit_price", 0] },
+                    discount: { $ifNull: ["$$lastItem.discount", 0] }
+                  },
+                  in: {
+                    $cond: [
+                      { $gt: ["$$units", 0] },
+                      { $round: [ { $subtract: [ "$$unit_price", { $divide: [ "$$discount", "$$units" ] } ] }, 2 ] },
+                      "$$unit_price"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          lastPurchaseDiscountPercentage: {
+            $let: {
+              vars: {
+                lastItem: { $arrayElemAt: [ { $sortArray: { input: "$purchaseItems", sortBy: { "order.createdAt": -1 } } }, 0 ] }
+              },
+              in: {
+                $let: {
+                  vars: {
+                    totalBeforeDiscount: { $multiply: [ { $ifNull: ["$$lastItem.unit_price", 0] }, { $ifNull: ["$$lastItem.units", 0] } ] }
+                  },
+                  in: {
+                    $cond: [
+                      { $gt: ["$$totalBeforeDiscount", 0] },
+                      { $round: [ { $multiply: [ { $divide: [ { $ifNull: ["$$lastItem.discount", 0] }, "$$totalBeforeDiscount" ] }, 100 ] }, 2 ] },
+                      0
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       },
 
@@ -279,6 +325,10 @@ export const getAllProducts = async (req, res) => {
               }
             }
           }
+          ,
+          // Expose only last purchase price and computed discount percentage
+          lastPurchasePrice: 1,
+          lastPurchaseDiscountPercentage: 1
         }
       },
 
